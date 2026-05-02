@@ -25,52 +25,44 @@ const MATCHES = [...R1, ...R2];
 // ─── Dynamic Bracket Generator ───────────────────────────────────────────────
 function buildBracket(books) {
   if (books.length < 2) return { rounds: [], seeds: books };
-  const n = books.length;
-  const totalRounds = Math.ceil(Math.log2(n));
-  const bracketSize = Math.pow(2, totalRounds);
-  const byes = bracketSize - n;
 
   const seeds = [...books];
   const rounds = [];
 
-  let r1Matches = [];
+  const r1 = [];
   let pos = 0;
-  for (let i = 0; i < bracketSize / 2; i++) {
-    const a = pos < seeds.length ? seeds[pos++] : null;
-    const b = pos < seeds.length ? seeds[pos++] : null;
-    r1Matches.push({ id: `r1_${i}`, a, b });
-  }
-  rounds.push(r1Matches);
-
-  for (let r = 1; r < totalRounds; r++) {
-    const prev = rounds[r - 1];
-    const rMatches = [];
-    for (let i = 0; i < prev.length; i += 2) {
-      rMatches.push({ id: `r${r + 1}_${i / 2}`, feedA: prev[i].id, feedB: prev[i + 1]?.id || null });
+  const pairCount = Math.floor(seeds.length / 2);
+  for (let i = 0; i < pairCount; i++) {
+    const match = { id: `r1_${i}`, a: seeds[pos++], b: seeds[pos++] };
+    if (i === pairCount - 1 && seeds.length % 2 === 1) {
+      match.c = seeds[pos++];
     }
-    rounds.push(rMatches);
+    r1.push(match);
   }
-  return { rounds, seeds, byes };
+  rounds.push(r1);
+
+  let roundNum = 2;
+  while (rounds[rounds.length - 1].length > 1) {
+    const prev = rounds[rounds.length - 1];
+    const prevLen = prev.length;
+    const matchCount = Math.floor(prevLen / 2);
+    const rnd = [];
+    let fi = 0;
+    for (let i = 0; i < matchCount; i++) {
+      const match = { id: `r${roundNum}_${i}`, feedA: prev[fi++].id, feedB: prev[fi++].id };
+      if (i === matchCount - 1 && prevLen % 2 === 1) {
+        match.feedC = prev[fi++].id;
+      }
+      rnd.push(match);
+    }
+    rounds.push(rnd);
+    roundNum++;
+  }
+  return { rounds, seeds };
 }
 
-function getBracketWinner(matchId, rounds, picks, books) {
-  if (picks[matchId]) return picks[matchId];
-  const round = rounds.find(r => r.some(m => m.id === matchId));
-  if (!round) return null;
-  const match = round.find(m => m.id === matchId);
-  if (!match) return null;
-
-  let a, b;
-  if (match.a !== undefined) {
-    a = match.a;
-    b = match.b;
-  } else {
-    a = match.feedA ? getBracketWinner(match.feedA, rounds, picks, books) : null;
-    b = match.feedB ? getBracketWinner(match.feedB, rounds, picks, books) : null;
-  }
-  if (a && !b) return a;
-  if (b && !a) return b;
-  return null;
+function getBracketWinner(matchId, rounds, picks) {
+  return picks[matchId] || null;
 }
 
 function isMatchEmpty(matchId, rounds) {
@@ -168,14 +160,18 @@ function extractGoodreadsUserId(input) {
   return m ? m[1] : null;
 }
 
-async function fetchGoodreadsRSS(userId) {
-  const rssPath = `/review/list_rss/${userId}?shelf=read&per_page=200`;
+async function fetchGoodreadsRSS(userId, page = 1) {
+  const rssPath = `/review/list_rss/${userId}?shelf=read&per_page=200&page=${page}`;
   const res = await fetch(`/api/goodreads?path=${encodeURIComponent(rssPath)}`);
   if (!res.ok) throw new Error("Failed to fetch Goodreads data");
   return await res.text();
 }
 
 function parseGoodreadsRSS(xmlText, targetYear) {
+  return parseGoodreadsRSSAll(xmlText).filter(b => b.year === targetYear);
+}
+
+function parseGoodreadsRSSAll(xmlText) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, "text/xml");
   const items = doc.querySelectorAll("item");
@@ -185,7 +181,7 @@ function parseGoodreadsRSS(xmlText, targetYear) {
     const dateStr = item.querySelector("user_read_at")?.textContent?.trim();
     if (!dateStr) return;
     const d = new Date(dateStr);
-    if (isNaN(d.getTime()) || d.getFullYear() !== targetYear) return;
+    if (isNaN(d.getTime())) return;
 
     const title = item.querySelector("title")?.textContent?.trim() || "";
     const author = item.querySelector("author_name")?.textContent?.trim() || "";
@@ -197,11 +193,24 @@ function parseGoodreadsRSS(xmlText, targetYear) {
       title,
       author,
       rating: rating >= 1 && rating <= 5 ? rating : null,
+      year: d.getFullYear(),
       month: d.getMonth(),
       cover: cover && !cover.includes("nophoto") ? cover : "",
     });
   });
   return books;
+}
+
+async function fetchAllGoodreadsBooks(userId) {
+  const allBooks = [];
+  for (let page = 1; page <= 10; page++) {
+    const xml = await fetchGoodreadsRSS(userId, page);
+    const books = parseGoodreadsRSSAll(xml);
+    if (books.length === 0) break;
+    allBooks.push(...books);
+    if (books.length < 200) break;
+  }
+  return allBooks;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -320,17 +329,17 @@ async function generateShareImage(data, year) {
   canvas.height = H;
   const ctx = canvas.getContext("2d");
 
-  const safeTop = 60, safeBot = 130;
+  const safeTop = 50, safeBot = 110;
   const CX = W / 2 - 20;
-  const PAD = 32;
+  const PAD = 40;
 
   const months = data.months;
   const b = data.bracket || {};
   const champion = b["final"];
   const bookCount = months.reduce((n, m) => n + m.books.length, 0);
   const starCount = months.filter(m => m.winner).length;
+  const filledMonths = months.map((m, i) => ({ ...m, idx: i })).filter(m => m.winner);
 
-  // Resolve top 3 (R2 winners)
   const r1Winners = R1.map(match => getR1Winner(match, months, b));
   const top3 = R2.map(match => {
     if (b[match.id]) return b[match.id];
@@ -341,7 +350,6 @@ async function generateShareImage(data, year) {
     return null;
   }).filter(Boolean);
 
-  // Preload cover images
   const allBooks = [...months.map(m => m.winner).filter(Boolean), ...top3, champion].filter(Boolean);
   const unique = [...new Map(allBooks.map(bk => [bk.id || bk.title, bk])).values()];
   await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
@@ -364,18 +372,18 @@ async function generateShareImage(data, year) {
   // ── Header ──
   let y = safeTop + 10;
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 44px system-ui, sans-serif";
+  ctx.font = "bold 62px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.letterSpacing = "10px";
+  ctx.letterSpacing = "12px";
   ctx.fillText("THE BRACKET CLUB", CX, y);
   ctx.letterSpacing = "0px";
-  y += 56;
+  y += 76;
 
   ctx.fillStyle = "#ffffff88";
-  ctx.font = "600 26px system-ui, sans-serif";
+  ctx.font = "600 36px system-ui, sans-serif";
   ctx.fillText(`Battle of the Books ${year}`, CX, y);
-  y += 44;
+  y += 56;
 
   ctx.strokeStyle = "#ffffff33";
   ctx.lineWidth = 1;
@@ -383,61 +391,53 @@ async function generateShareImage(data, year) {
   ctx.moveTo(PAD + 40, y);
   ctx.lineTo(W - PAD - 40, y);
   ctx.stroke();
-  y += 24;
+  y += 20;
 
-  // ── Vertical budget (content area: y to footerY) ──
   const usableW = W - PAD * 2;
   const footerStart = H - safeBot;
-  const contentH = footerStart - y;
-  // Monthly: ~40% | Top 3: ~30% | BOTY: ~30%
-  const monthlyH = Math.floor(contentH * 0.40);
-  const top3H = Math.floor(contentH * 0.30);
-  const botyH = Math.floor(contentH * 0.30);
 
-  // ── Section 1: Monthly Picks ──
-  ctx.fillStyle = "#ffffffaa";
-  ctx.font = "800 22px system-ui, sans-serif";
-  ctx.letterSpacing = "5px";
+  // ── Section 1: Monthly Picks (only show filled months) ──
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "800 32px system-ui, sans-serif";
+  ctx.letterSpacing = "6px";
   ctx.fillText("MONTHLY PICKS", CX, y);
   ctx.letterSpacing = "0px";
-  y += 34;
+  y += 44;
 
-  const ch = Math.floor((monthlyH - 30 - 34 - 14) / 2 - 20);
-  const cw = Math.floor(ch / 1.45);
-  const cg = Math.floor((usableW - 6 * cw) / 5);
-  const gridX = CX - (6 * cw + 5 * cg) / 2;
+  if (filledMonths.length > 0) {
+    const cols = Math.min(filledMonths.length, 6);
+    const rows = Math.ceil(filledMonths.length / cols);
+    const maxCoverH = Math.min(180, Math.floor((footerStart - y - 500) / rows - 44));
+    const cw = Math.floor(maxCoverH / 1.45);
+    const cg = Math.min(24, Math.floor((usableW - cols * cw) / Math.max(cols - 1, 1)));
+    const totalGridW = cols * cw + (cols - 1) * cg;
+    const gridX = CX - totalGridW / 2;
 
-  for (let i = 0; i < 12; i++) {
-    const col = i % 6, row = Math.floor(i / 6);
-    const x = gridX + col * (cw + cg);
-    const cy = y + row * (ch + 34);
-    const winner = months[i]?.winner;
+    for (let fi = 0; fi < filledMonths.length; fi++) {
+      const fm = filledMonths[fi];
+      const col = fi % cols, row = Math.floor(fi / cols);
+      const x = gridX + col * (cw + cg);
+      const cy = y + row * (maxCoverH + 44);
 
-    ctx.fillStyle = "#00000066";
-    ctx.beginPath();
-    const lblW = cw + 8, lblH = 22;
-    ctx.roundRect(x + cw / 2 - lblW / 2, cy - 4, lblW, lblH, 4);
-    ctx.fill();
-    ctx.fillStyle = winner ? "#fff" : "#ffffffaa";
-    ctx.font = `800 ${Math.max(16, cw * 0.18)}px system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(MONTHS[i].toUpperCase(), x + cw / 2, cy);
-
-    if (winner) {
-      drawCover(ctx, winner, x, cy + 18, cw, ch);
-    } else {
-      ctx.save();
+      ctx.fillStyle = "#00000077";
       ctx.beginPath();
-      ctx.roundRect(x, cy + 18, cw, ch, 8);
-      ctx.fillStyle = "#ffffff11";
+      const lblW = cw + 12, lblH = 28;
+      ctx.roundRect(x + cw / 2 - lblW / 2, cy - 4, lblW, lblH, 5);
       ctx.fill();
-      ctx.strokeStyle = "#ffffff22";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
+      ctx.fillStyle = "#fff";
+      ctx.font = "800 22px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(MONTHS[fm.idx].toUpperCase(), x + cw / 2, cy + 2);
+
+      drawCover(ctx, fm.winner, x, cy + 28, cw, maxCoverH);
     }
+    y += rows * (maxCoverH + 44) + 12;
+  } else {
+    ctx.fillStyle = "#ffffff44";
+    ctx.font = "500 28px system-ui, sans-serif";
+    ctx.fillText("No monthly picks yet", CX, y + 10);
+    y += 50;
   }
-  y += 2 * (ch + 34) + 16;
 
   // ── Section 2: Top 3 Books ──
   ctx.strokeStyle = "#ffffff22";
@@ -446,57 +446,54 @@ async function generateShareImage(data, year) {
   ctx.moveTo(PAD + 20, y);
   ctx.lineTo(W - PAD - 20, y);
   ctx.stroke();
-  y += 18;
+  y += 16;
 
-  ctx.fillStyle = "#ffffffaa";
-  ctx.font = "800 22px system-ui, sans-serif";
-  ctx.letterSpacing = "5px";
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "800 32px system-ui, sans-serif";
+  ctx.letterSpacing = "6px";
   ctx.textAlign = "center";
   ctx.fillText("TOP 3", CX, y);
   ctx.letterSpacing = "0px";
-  y += 32;
+  y += 44;
 
-  const t3H = Math.floor(top3H - 18 - 28 - 50);
+  const remainingForT3AndBoty = footerStart - y;
+  const t3Section = champion ? Math.floor(remainingForT3AndBoty * 0.45) : Math.floor(remainingForT3AndBoty * 0.65);
+  const t3H = Math.min(260, t3Section - 60);
   const t3W = Math.floor(t3H / 1.45);
-  const t3Gap = Math.floor((usableW - 3 * t3W) / 2);
-  const t3TotalW = 3 * t3W + 2 * t3Gap;
+  const actualCount = top3.length;
+  const t3Gap = actualCount > 1 ? Math.min(28, Math.floor((usableW - actualCount * t3W) / (actualCount - 1))) : 0;
+  const t3TotalW = actualCount * t3W + Math.max(0, actualCount - 1) * t3Gap;
   const t3X = CX - t3TotalW / 2;
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < actualCount; i++) {
     const book = top3[i];
     const x = t3X + i * (t3W + t3Gap);
+    drawCover(ctx, book, x, y, t3W, t3H);
 
-    if (book) {
-      drawCover(ctx, book, x, y, t3W, t3H);
-      ctx.font = `800 ${Math.max(18, t3W * 0.12)}px system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      const titleLines = wrapText(ctx, book.title, t3W + 20);
-      const tlH = titleLines.length * 24 + 8;
-      ctx.fillStyle = "#00000055";
-      ctx.beginPath();
-      ctx.roundRect(x - 6, y + t3H + 8, t3W + 12, tlH, 6);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      titleLines.slice(0, 2).forEach((line, li) => {
-        ctx.fillText(line, x + t3W / 2, y + t3H + 24 + li * 24);
-      });
-    } else {
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(x, y, t3W, t3H, 10);
-      ctx.fillStyle = "#ffffff11";
-      ctx.fill();
-      ctx.strokeStyle = "#ffffff22";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = "#ffffff33";
-      ctx.font = "28px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("?", x + t3W / 2, y + t3H / 2 + 10);
-      ctx.restore();
-    }
+    ctx.font = "800 24px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const titleLines = wrapText(ctx, book.title, t3W + 30);
+    const displayLines = titleLines.slice(0, 2);
+    if (titleLines.length > 2) displayLines[1] = displayLines[1].replace(/\s+\S*$/, "…");
+    const tlH = displayLines.length * 30 + 10;
+    ctx.fillStyle = "#00000066";
+    ctx.beginPath();
+    ctx.roundRect(x - 8, y + t3H + 8, t3W + 16, tlH, 8);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    displayLines.forEach((line, li) => {
+      ctx.fillText(line, x + t3W / 2, y + t3H + 30 + li * 30);
+    });
   }
-  y += t3H + 50;
+
+  if (actualCount === 0) {
+    ctx.fillStyle = "#ffffff44";
+    ctx.font = "500 28px system-ui, sans-serif";
+    ctx.fillText("Keep reading to fill your Top 3!", CX, y + 20);
+    y += 60;
+  } else {
+    y += t3H + (actualCount > 0 ? 80 : 0);
+  }
 
   // ── Section 3: Book of the Year ──
   ctx.strokeStyle = "#ffffff22";
@@ -505,68 +502,70 @@ async function generateShareImage(data, year) {
   ctx.moveTo(PAD + 20, y);
   ctx.lineTo(W - PAD - 20, y);
   ctx.stroke();
-  y += 18;
+  y += 16;
 
   if (champion) {
-    const champH = Math.floor(botyH - 18 - 40);
+    const botySpace = footerStart - y - 10;
+    const champH = Math.min(220, botySpace - 40);
     const champW = Math.floor(champH / 1.45);
-    const boxW = Math.min(usableW, champW + 320);
-    const boxH = champH + 36;
+    const boxW = Math.min(usableW, champW + 400);
+    const boxH = champH + 40;
     const boxX = CX - boxW / 2;
 
-    ctx.fillStyle = "#fbbf2412";
+    ctx.fillStyle = "#fbbf2415";
     ctx.beginPath();
-    ctx.roundRect(boxX, y, boxW, boxH, 18);
+    ctx.roundRect(boxX, y, boxW, boxH, 20);
     ctx.fill();
-    ctx.strokeStyle = "#fbbf2444";
+    ctx.strokeStyle = "#fbbf2455";
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const coverX = boxX + 24;
-    drawCover(ctx, champion, coverX, y + 18, champW, champH);
+    const coverX = boxX + 28;
+    drawCover(ctx, champion, coverX, y + 20, champW, champH);
 
-    const textX = coverX + champW + 28;
-    const textMaxW = boxX + boxW - textX - 20;
+    const textX = coverX + champW + 32;
+    const textMaxW = boxX + boxW - textX - 24;
 
     ctx.fillStyle = "#fbbf24";
-    ctx.font = "800 20px system-ui, sans-serif";
-    ctx.letterSpacing = "4px";
+    ctx.font = "800 28px system-ui, sans-serif";
+    ctx.letterSpacing = "5px";
     ctx.textAlign = "left";
-    ctx.fillText("BOOK OF THE YEAR", textX, y + 36);
+    ctx.fillText("BOOK OF THE YEAR", textX, y + 40);
     ctx.letterSpacing = "0px";
 
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 34px system-ui, sans-serif";
+    ctx.font = "bold 38px system-ui, sans-serif";
     const champLines = wrapText(ctx, champion.title, textMaxW);
-    champLines.forEach((line, li) => {
-      ctx.fillText(line, textX, y + 74 + li * 40);
+    champLines.slice(0, 2).forEach((line, li) => {
+      ctx.fillText(line, textX, y + 86 + li * 46);
     });
 
     if (champion.author) {
+      const authY = y + 86 + Math.min(champLines.length, 2) * 46 + 10;
       ctx.fillStyle = "#ffffffbb";
-      ctx.font = "500 22px system-ui, sans-serif";
-      ctx.fillText(champion.author, textX, y + 74 + champLines.length * 40 + 14);
+      ctx.font = "500 28px system-ui, sans-serif";
+      ctx.fillText(champion.author, textX, authY);
     }
 
     ctx.fillStyle = "#fbbf24";
-    ctx.font = "52px system-ui, sans-serif";
+    ctx.font = "56px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("🏆", textX + textMaxW / 2, y + champH - 20);
+    ctx.fillText("🏆", textX + textMaxW / 2, y + champH - 10);
   } else {
     ctx.fillStyle = "#ffffff15";
     ctx.beginPath();
-    ctx.roundRect(CX - 120, y, 240, 100, 14);
+    ctx.roundRect(CX - 160, y, 320, 110, 16);
     ctx.fill();
     ctx.fillStyle = "#ffffff66";
-    ctx.font = "800 20px system-ui, sans-serif";
+    ctx.font = "800 28px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("BOOK OF THE YEAR", CX, y + 38);
-    ctx.font = "40px system-ui, sans-serif";
-    ctx.fillText("👑", CX, y + 74);
+    ctx.fillText("BOOK OF THE YEAR", CX, y + 42);
+    ctx.font = "44px system-ui, sans-serif";
+    ctx.fillText("👑", CX, y + 82);
   }
 
   // ── Stats Footer ──
-  const footerY = H - safeBot + 10;
+  const footerY = footerStart + 8;
   ctx.strokeStyle = "#ffffff22";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -574,14 +573,14 @@ async function generateShareImage(data, year) {
   ctx.lineTo(W - PAD - 20, footerY);
   ctx.stroke();
 
-  ctx.fillStyle = "#ffffffbb";
-  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "700 30px system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 28);
+  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 34);
 
-  ctx.fillStyle = "#ffffff66";
-  ctx.font = "500 18px system-ui, sans-serif";
-  ctx.fillText("thebracketclub.com", CX, footerY + 58);
+  ctx.fillStyle = "#ffffffaa";
+  ctx.font = "700 26px system-ui, sans-serif";
+  ctx.fillText("thebracket.club", CX, footerY + 72);
 
   return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
 }
@@ -803,8 +802,42 @@ export default function App() {
 
   useEffect(() => {
     migrateStorage();
-    setData(store.get(year) || freshData());
-    setLoading(false);
+    const existing = store.get(year);
+    if (existing) {
+      setData(existing);
+      setLoading(false);
+      return;
+    }
+    // DEV: auto-load Tara's Goodreads shelf for testing — remove before production
+    const DEV_GOODREADS_USER = "152670076";
+    (async () => {
+      try {
+        const allBooks = await fetchAllGoodreadsBooks(DEV_GOODREADS_USER);
+        const byYear = {};
+        allBooks.forEach(book => {
+          if (!byYear[book.year]) byYear[book.year] = [];
+          byYear[book.year].push(book);
+        });
+        for (const [yr, books] of Object.entries(byYear)) {
+          if (store.get(Number(yr))) continue;
+          const nd = freshData();
+          books.forEach((book, i) => {
+            nd.months[book.month].books.push({
+              id: Date.now() + i + Number(yr) * 1000,
+              title: book.title,
+              author: book.author,
+              cover: book.cover || "",
+              rating: book.rating,
+            });
+          });
+          store.set(Number(yr), nd);
+        }
+        setData(store.get(year) || freshData());
+      } catch {
+        setData(freshData());
+      }
+      setLoading(false);
+    })();
   }, []);
 
   useEffect(() => {
@@ -818,9 +851,27 @@ export default function App() {
 
   const NAV = [
     { v:"home",    icon:"🏠", lbl:"Home"    },
-    { v:"month",   icon:"📅", lbl:"Month"   },
+    { v:"month",   icon:"📖", lbl:FULL[new Date().getMonth()] },
     { v:"bracket", icon:"🏆", lbl:"Bracket" },
   ];
+
+  const VIEWS = ["home", "month", "bracket"];
+  const viewIdx = view === "import" ? 0 : VIEWS.indexOf(view);
+  const swipeRef = useRef(null);
+
+  const onSwipeStart = (e) => {
+    swipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onSwipeEnd = (e) => {
+    if (!swipeRef.current) return;
+    const dx = e.changedTouches[0].clientX - swipeRef.current.x;
+    const dy = e.changedTouches[0].clientY - swipeRef.current.y;
+    swipeRef.current = null;
+    if (Math.abs(dy) > Math.abs(dx) || Math.abs(dx) < 50) return;
+    const vi = VIEWS.indexOf(view);
+    if (dx < 0 && vi < 2) { setBattleId(null); setView(VIEWS[vi + 1]); }
+    else if (dx > 0 && vi > 0) { setBattleId(null); setView(VIEWS[vi - 1]); }
+  };
 
   const curM = new Date().getMonth();
   const hideNav = view === "import";
@@ -834,23 +885,36 @@ export default function App() {
   }
 
   return (
-    <div style={{ minHeight:"100vh", background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative" }}>
+    <div style={{ height:"100dvh", background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative", display:"flex", flexDirection:"column", overflow:"hidden" }}>
       {/* Header */}
-      <div style={{ background:"#14532d", color:"#fff", textAlign:"center", padding:"10px 16px 4px", position:"sticky", top:0, zIndex:20, boxShadow:"0 2px 8px #0002" }}>
-        <img src="/logo.png" alt="Bracket Club" style={{ height:82, width:82, objectFit:"contain" }} />
+      <div style={{ background:"#14532d", color:"#fff", textAlign:"center", padding:"6px 16px 2px", flexShrink:0, zIndex:20, boxShadow:"0 2px 8px #0002" }}>
+        <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
       </div>
 
       {/* Views */}
-      <div style={{ paddingBottom: hideNav ? 0 : 80 }}>
-        {view === "home"    && <Home    data={data} save={save} curM={curM} year={year} setYear={setYear} goMonth={i => { setMonthIdx(i); setView("month"); }} goBracket={() => setView("bracket")} goImport={() => setView("import")} />}
-        {view === "month"   && <Month   data={data} save={save} idx={monthIdx} setIdx={setMonthIdx} />}
-        {view === "bracket" && <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} />}
-        {view === "import"  && <Import  data={data} save={save} onDone={() => setView("home")} year={year} />}
-      </div>
+      {view === "import" ? (
+        <div style={{ flex:1, height:0, overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+          <Import data={data} save={save} onDone={() => setView("home")} year={year} />
+        </div>
+      ) : (
+        <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd} style={{ flex:1, height:0, overflow:"hidden" }}>
+          <div style={{ display:"flex", width:"300%", height:"100%", transform:`translateX(-${viewIdx*(100/3)}%)`, transition:"transform 0.3s ease-out" }}>
+            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goMonth={i => { setMonthIdx(i); setView("month"); }} goBracket={() => setView("bracket")} goImport={() => setView("import")} />
+            </div>
+            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+              <Month data={data} save={save} idx={monthIdx} setIdx={setMonthIdx} />
+            </div>
+            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+              <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Nav */}
       {!hideNav && (
-        <div style={{ position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", zIndex:20 }}>
+        <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", zIndex:20 }}>
           {NAV.map(({ v, icon, lbl }) => (
             <button
               key={v}
@@ -895,74 +959,34 @@ function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
   };
 
   return (
-    <div style={{ padding:16, display:"flex", flexDirection:"column", gap:14 }}>
-
-      {/* ── Current month hero ── */}
-      <div
-        onClick={() => goMonth(curM)}
-        style={{ background:"linear-gradient(135deg,#166534,#14532d)", borderRadius:20, padding:18, color:"#fff", boxShadow:"0 4px 16px #14532d44", cursor:"pointer" }}
-      >
-        <div style={{ fontSize:10, opacity:.65, textTransform:"uppercase", letterSpacing:2, marginBottom:2 }}>Reading now</div>
-        <div style={{ fontSize:22, fontWeight:800, marginBottom:12 }}>{FULL[curM]}</div>
-        {curPick ? (
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <Cover book={curPick} size="md" />
-            <div style={{ minWidth:0 }}>
-              <div style={{ fontSize:10, opacity:.65, marginBottom:2 }}>⭐ Favourite this month</div>
-              <div style={{ fontWeight:800, fontSize:15, lineHeight:1.3 }}>{curPick.title}</div>
-              {curPick.author && <div style={{ fontSize:12, opacity:.75, marginTop:2 }}>{curPick.author}</div>}
-            </div>
-          </div>
-        ) : curBooks.length > 0 ? (
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ display:"flex" }}>
-              {curBooks.slice(0,3).map((b,i) => (
-                <div key={b.id} style={{ marginLeft: i>0 ? -10 : 0, zIndex: 3-i, position:"relative" }}>
-                  <Cover book={b} size="sm" />
-                </div>
-              ))}
-            </div>
-            <div>
-              <div style={{ fontWeight:700, fontSize:14 }}>{curBooks.length} book{curBooks.length > 1 ? "s" : ""} logged</div>
-              <div style={{ fontSize:12, opacity:.75, marginTop:1 }}>Tap to pick your favourite ⭐</div>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display:"inline-flex", alignItems:"center", gap:8, background:"rgba(255,255,255,.15)", borderRadius:99, padding:"8px 16px", fontSize:13, fontWeight:700 }}>
-            📖 Log what you're reading →
-          </div>
-        )}
-      </div>
+    <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
 
       {/* ── Year Reads grid ── */}
-      <div style={{ background:"#fff", borderRadius:20, padding:16, boxShadow:"0 1px 4px #0001" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:28, height:28, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:14, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
-            <span style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Reads</span>
-            <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:28, height:28, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:14, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
+      <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
+          <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Reads</div>
+            <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
           </div>
-          <span style={{ fontSize:12, color:"#9ca3af", fontWeight:600 }}>{count} / 12</span>
+          <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
         </div>
-        <div style={{ height:5, background:"#f0fdf4", borderRadius:99, overflow:"hidden", marginBottom:14 }}>
-          <div style={{ height:"100%", width:`${(count/12)*100}%`, background:"linear-gradient(90deg,#4ade80,#16a34a)", borderRadius:99, transition:"width .4s ease" }} />
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
             const isCur = i === curM;
             const hasBooksButNoPick = !pick && (data.months[i].books?.length > 0);
             return (
-              <button key={m} onClick={() => goMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:5, border:"none", background:"none", cursor:"pointer", padding:0 }}>
-                <span style={{ fontSize:10, fontWeight:700, color: isCur ? "#15803d" : "#9ca3af" }}>{m}</span>
+              <button key={m} onClick={() => goMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+                <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
                 {pick ? (
-                  <div style={{ position:"relative" }}>
-                    <Cover book={pick} size="sm" />
-                    <span style={{ position:"absolute", top:-4, right:-4, fontSize:12 }}>⭐</span>
+                  <div style={{ position:"relative", flex:1, display:"flex" }}>
+                    <Cover book={pick} size="md" />
+                    <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
                   </div>
                 ) : (
-                  <div style={{ height:56, width:40, borderRadius:6, background: isCur?"#dcfce7":hasBooksButNoPick?"#fef9c3":"#f5f5f4", border:`2px dashed ${isCur?"#4ade80":hasBooksButNoPick?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>
-                    {isCur ? "📖" : hasBooksButNoPick ? "⭐" : ""}
+                  <div style={{ flex:1, width:56, borderRadius:6, background: hasBooksButNoPick?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooksButNoPick?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
+                    {hasBooksButNoPick ? <span style={{ fontSize:12 }}>📚</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
                   </div>
                 )}
               </button>
@@ -973,28 +997,32 @@ function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
 
       {/* ── Bracket CTA ── */}
       {count >= 2 && (
-        <button onClick={goBracket} style={{ background:"#fff", border:"none", borderRadius:20, padding:"14px 16px", display:"flex", alignItems:"center", gap:12, boxShadow:"0 1px 4px #0001", cursor:"pointer", width:"100%", textAlign:"left" }}>
-          <span style={{ fontSize:26 }}>🏆</span>
+        <button onClick={goBracket} style={{ background:"#fff", border:"none", borderRadius:14, padding:"10px 14px", display:"flex", alignItems:"center", gap:10, boxShadow:"0 1px 4px #0001", cursor:"pointer", width:"100%", textAlign:"left", flexShrink:0 }}>
+          <span style={{ fontSize:22 }}>🏆</span>
           <div style={{ flex:1 }}>
-            <div style={{ fontWeight:800, color:"#1c1917", fontSize:14 }}>Tournament Bracket</div>
-            <div style={{ fontSize:12, color:readyMatch?"#15803d":"#9ca3af", marginTop:2 }}>
+            <div style={{ fontWeight:800, color:"#1c1917", fontSize:13 }}>Tournament Bracket</div>
+            <div style={{ fontSize:11, color:readyMatch?"#15803d":"#9ca3af", marginTop:1 }}>
               {readyMatch ? `⚔️ Battle ready!` : `${count} picks in — keep reading!`}
             </div>
           </div>
-          <span style={{ color:"#d6d3d1", fontSize:20 }}>›</span>
+          <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
         </button>
       )}
 
-      {/* ── Bottom row: Import + Share ── */}
-      <div style={{ display:"flex", gap:10 }}>
-        <button onClick={goImport} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:16, padding:"12px 10px", display:"flex", alignItems:"center", justifyContent:"center", gap:7, cursor:"pointer" }}>
-          <span style={{ fontSize:18 }}>📥</span>
-          <span style={{ fontWeight:700, color:"#14532d", fontSize:13 }}>Goodreads Import</span>
+      {/* ── Bottom row: Share Month + Import + Share ── */}
+      <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+        <button onClick={() => {}} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
+          <span style={{ fontSize:15 }}>🗓️</span>
+          <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Share Month</span>
+        </button>
+        <button onClick={goImport} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
+          <span style={{ fontSize:15 }}>📥</span>
+          <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Import</span>
         </button>
         {count >= 1 && (
-          <button onClick={handleShare} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:16, padding:"12px 10px", display:"flex", alignItems:"center", justifyContent:"center", gap:7, cursor:"pointer" }}>
-            <span style={{ fontSize:18 }}>📤</span>
-            <span style={{ fontWeight:700, color:"#14532d", fontSize:13 }}>{shareMsg || "Share"}</span>
+          <button onClick={handleShare} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
+            <span style={{ fontSize:15 }}>📤</span>
+            <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>{shareMsg || "Share"}</span>
           </button>
         )}
       </div>
@@ -1179,49 +1207,6 @@ function Month({ data, save, idx, setIdx }) {
   const m = data.months[idx];
   const monthPicks = m.bracketPicks || {};
 
-  // Auto-advance byes (only for genuinely empty opponent slots)
-  useEffect(() => {
-    if (m.books.length < 2) return;
-    const bracket = buildBracket(m.books);
-    const { rounds } = bracket;
-    const picks = m.bracketPicks || {};
-    const newPicks = { ...picks };
-    let changed = false;
-    for (const round of rounds) {
-      for (const match of round) {
-        if (newPicks[match.id]) continue;
-        let a, b;
-        if (match.a !== undefined) { a = match.a; b = match.b; }
-        else {
-          a = match.feedA ? getBracketWinner(match.feedA, rounds, newPicks, m.books) : null;
-          b = match.feedB ? getBracketWinner(match.feedB, rounds, newPicks, m.books) : null;
-        }
-        let isBye = false;
-        if (match.a !== undefined) {
-          isBye = (a && !b) || (!a && b);
-        } else {
-          const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
-          const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
-          isBye = (a && feedBEmpty) || (b && feedAEmpty);
-        }
-        if (isBye) {
-          newPicks[match.id] = a || b;
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      const nd = { ...data };
-      nd.months = [...nd.months];
-      nd.months[idx] = { ...m, bracketPicks: newPicks };
-      const finalMatch = rounds[rounds.length - 1]?.[0];
-      if (finalMatch && newPicks[finalMatch.id]) {
-        const champ = getBracketWinner(finalMatch.id, rounds, newPicks, m.books);
-        if (champ) nd.months[idx].winner = champ;
-      }
-      save(nd);
-    }
-  }, [showBracket, m.books.length, JSON.stringify(m.bracketPicks || {})]);
 
   // Swipe left/right to change month
   const onTouchStart = (e) => {
@@ -1280,7 +1265,7 @@ function Month({ data, save, idx, setIdx }) {
     const bracket = buildBracket(m.books);
     const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
     if (finalMatch) {
-      const champion = getBracketWinner(finalMatch.id, bracket.rounds, newPicks, m.books);
+      const champion = getBracketWinner(finalMatch.id, bracket.rounds, newPicks);
       if (champion && newPicks[finalMatch.id]) {
         nd.months[idx].winner = champion;
       }
@@ -1321,15 +1306,19 @@ function Month({ data, save, idx, setIdx }) {
     const bracket = buildBracket(m.books);
     const match = bracket.rounds.flat().find(mt => mt.id === monthBattle);
     if (match) {
-      let a, b;
-      if (match.a !== undefined) { a = match.a; b = match.b; }
-      else {
-        a = match.feedA ? getBracketWinner(match.feedA, bracket.rounds, monthPicks, m.books) : null;
-        b = match.feedB ? getBracketWinner(match.feedB, bracket.rounds, monthPicks, m.books) : null;
+      const contenders = [];
+      if (match.a !== undefined) {
+        contenders.push(match.a, match.b);
+        if (match.c) contenders.push(match.c);
+      } else {
+        if (match.feedA) { const w = getBracketWinner(match.feedA, bracket.rounds, monthPicks); if (w) contenders.push(w); }
+        if (match.feedB) { const w = getBracketWinner(match.feedB, bracket.rounds, monthPicks); if (w) contenders.push(w); }
+        if (match.feedC) { const w = getBracketWinner(match.feedC, bracket.rounds, monthPicks); if (w) contenders.push(w); }
       }
       const winner = monthPicks[monthBattle];
       const roundNum = bracket.rounds.findIndex(r => r.some(mt => mt.id === monthBattle)) + 1;
       const isFinal = roundNum === bracket.rounds.length;
+      const isTriple = contenders.length === 3;
 
       return (
         <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
@@ -1341,24 +1330,23 @@ function Month({ data, save, idx, setIdx }) {
             <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
             <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
           </div>
-          <div style={{ display:"flex", gap:12, position:"relative" }}>
-            {[a, b].map((book) => {
-              if (!book) return null;
+          <div style={{ display:"flex", gap: isTriple ? 8 : 12, position:"relative" }}>
+            {contenders.filter(Boolean).map((book) => {
               const won = winner?.id === book?.id;
               const lost = winner && !won;
               return (
                 <button key={book?.id} onClick={() => monthVote(monthBattle, book)}
-                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
-                  <Cover book={book} size="lg" />
+                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  <Cover book={book} size={isTriple ? "md" : "lg"} />
                   <div style={{ textAlign:"center" }}>
-                    <div style={{ fontWeight:800, fontSize:13, color:"#1c1917" }}>{book?.title}</div>
-                    {book?.author && <div style={{ fontSize:11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                    <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
+                    {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
                   </div>
-                  {won && <span style={{ fontSize:22 }}>🏆</span>}
+                  {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
                 </button>
               );
             })}
-            <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>
+            {!isTriple && <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>}
           </div>
           {winner && (
             <div style={{ textAlign:"center" }}>
@@ -1372,8 +1360,51 @@ function Month({ data, save, idx, setIdx }) {
     }
   }
 
-  // ── Monthly bracket overview ──
-  if (showBracket && m.books.length >= 2) {
+  // ── Monthly pick: special 3-book view ──
+  if (showBracket && m.books.length >= 2 && m.books.length <= 3) {
+    return (
+      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+        <button onClick={() => setShowBracket(false)}
+          style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+          ‹ Back to {FULL[idx]}
+        </button>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>Pick your favourite</div>
+          <div style={{ fontSize:12, color:"#9ca3af", marginTop:2 }}>{FULL[idx]} — {m.books.length} books</div>
+        </div>
+        <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+          {m.books.map(book => {
+            const won = m.winner?.id === book.id;
+            const lost = m.winner && !won;
+            return (
+              <button key={book.id} onClick={() => {
+                const nd = { ...data };
+                nd.months = [...nd.months];
+                nd.months[idx] = { ...m, winner: won ? null : book };
+                save(nd);
+              }}
+                style={{ flex:1, maxWidth:140, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.4:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                <Cover book={book} size="lg" />
+                <div style={{ textAlign:"center" }}>
+                  <div style={{ fontWeight:800, fontSize:12, color:"#1c1917", lineHeight:1.3 }}>{book.title}</div>
+                  {book.author && <div style={{ fontSize:10, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                </div>
+                {won && <span style={{ fontSize:22 }}>⭐</span>}
+              </button>
+            );
+          })}
+        </div>
+        {m.winner && (
+          <div style={{ textAlign:"center", fontSize:13, color:"#15803d", fontWeight:800 }}>
+            "{m.winner.title}" is your pick!
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Monthly bracket overview (4+ books) ──
+  if (showBracket && m.books.length >= 4) {
     const bracket = buildBracket(m.books);
     const { rounds } = bracket;
 
@@ -1405,49 +1436,55 @@ function Month({ data, save, idx, setIdx }) {
               <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, textAlign:"center" }}>{roundLabel}</div>
               <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(round.length, 3)}, 1fr)`, gap:8 }}>
                 {round.map(match => {
-                  let a, b;
-                  if (match.a !== undefined) { a = match.a; b = match.b; }
-                  else {
-                    a = match.feedA ? getBracketWinner(match.feedA, rounds, monthPicks, m.books) : null;
-                    b = match.feedB ? getBracketWinner(match.feedB, rounds, monthPicks, m.books) : null;
+                  const contenders = [];
+                  if (match.a !== undefined) {
+                    contenders.push(match.a, match.b);
+                    if (match.c) contenders.push(match.c);
+                  } else {
+                    if (match.feedA) { const w = getBracketWinner(match.feedA, rounds, monthPicks); if (w) contenders.push(w); }
+                    if (match.feedB) { const w = getBracketWinner(match.feedB, rounds, monthPicks); if (w) contenders.push(w); }
+                    if (match.feedC) { const w = getBracketWinner(match.feedC, rounds, monthPicks); if (w) contenders.push(w); }
                   }
                   const winner = monthPicks[match.id];
-                  let autoAdvanced = false;
-                  if (match.a !== undefined) {
-                    autoAdvanced = (a && !b) || (!a && b);
-                  } else {
-                    const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
-                    const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
-                    autoAdvanced = (a && feedBEmpty) || (b && feedAEmpty);
-                  }
-                  const advancee = autoAdvanced ? (a || b) : null;
-                  const ready = a && b && !winner;
+                  const needed = match.a !== undefined ? (match.c ? 3 : 2) : (match.feedC ? 3 : 2);
+                  const ready = contenders.length === needed && !winner;
+                  const locked = !winner && !ready;
                   const canClick = ready || !!winner;
+                  const isTriple = needed === 3;
 
                   return (
                     <button key={match.id}
                       onClick={() => canClick ? setMonthBattle(match.id) : null}
                       style={{
                         display:"flex", flexDirection:"column", alignItems:"center", gap:4,
-                        padding:"10px 4px", background: (winner || advancee) ? "#f0fdf4" : "#fff",
-                        border:`2px solid ${(winner || advancee) ? "#22c55e" : ready ? "#4ade80" : "#e7e5e4"}`,
+                        padding:"10px 4px",
+                        background: winner ? "#f0fdf4" : "#fff",
+                        border: locked ? "2px dashed #e7e5e4" : `2px solid ${winner ? "#22c55e" : "#e7e5e4"}`,
                         borderRadius:14, cursor: canClick ? "pointer" : "default",
-                        opacity: (!a && !b) ? 0.35 : 1, transition:"all .2s",
+                        opacity: locked ? 0.4 : 1, transition:"all .2s",
                       }}>
-                      {(winner || advancee) ? (
+                      {winner ? (
                         <>
-                          <Cover book={winner || advancee} size="sm" />
-                          <div style={{ fontSize:9, fontWeight:700, color:"#15803d", lineHeight:1.2, textAlign:"center", maxWidth:80 }}>{(winner || advancee).title}</div>
-                          {autoAdvanced && <div style={{ fontSize:8, color:"#9ca3af" }}>auto-advanced</div>}
+                          <Cover book={winner} size="sm" />
+                          <div style={{ fontSize:9, fontWeight:700, color:"#15803d", lineHeight:1.2, textAlign:"center", maxWidth:80 }}>{winner.title}</div>
+                          <div style={{ fontSize:7, color:"#22c55e", fontWeight:800, textTransform:"uppercase", letterSpacing:1 }}>Winner</div>
                         </>
                       ) : ready ? (
-                        <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-                          <Cover book={a} size="xs" />
-                          <span style={{ fontSize:9, fontWeight:800, color:"#14532d" }}>vs</span>
-                          <Cover book={b} size="xs" />
+                        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                          <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                            {contenders.map((book, ci) => (
+                              <div key={book.id} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                                {ci > 0 && <span style={{ fontSize:9, fontWeight:800, color:"#78716c" }}>vs</span>}
+                                <Cover book={book} size="xs" />
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize:8, fontWeight:700, color:"#78716c", display:"flex", alignItems:"center", gap:3 }}>
+                            <span style={{ fontSize:10 }}>⚔️</span> Battle Ready
+                          </div>
                         </div>
                       ) : (
-                        <div style={{ fontSize:11, color:"#d6d3d1", padding:"8px 0" }}>?</div>
+                        <div style={{ fontSize:11, color:"#d6d3d1", padding:"8px 0" }}>🔒</div>
                       )}
                     </button>
                   );
@@ -1550,20 +1587,22 @@ function Month({ data, save, idx, setIdx }) {
                 ))}
               </div>
             </div>
-            {/* Favourite button */}
-            <button
-              onClick={() => starBook(book)}
-              style={{
-                background: isStarred ? "#dcfce7" : "#f5f5f4",
-                border:"none", borderRadius:99, width:34, height:34,
-                fontSize:16, cursor:"pointer", flexShrink:0,
-                display:"flex", alignItems:"center", justifyContent:"center",
-                transition:"all .15s",
-              }}
-              title={isStarred ? "Unstar" : "Pick as favourite"}
-            >
-              {isStarred ? "⭐" : "☆"}
-            </button>
+            {/* Favourite button (only when < 2 books, otherwise bracket handles it) */}
+            {m.books.length < 2 && (
+              <button
+                onClick={() => starBook(book)}
+                style={{
+                  background: isStarred ? "#dcfce7" : "#f5f5f4",
+                  border:"none", borderRadius:99, width:34, height:34,
+                  fontSize:16, cursor:"pointer", flexShrink:0,
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  transition:"all .15s",
+                }}
+                title={isStarred ? "Unstar" : "Pick as favourite"}
+              >
+                {isStarred ? "⭐" : "☆"}
+              </button>
+            )}
             {/* Delete */}
             <button
               onClick={() => delBook(book.id)}
