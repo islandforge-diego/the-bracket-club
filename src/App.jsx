@@ -22,6 +22,68 @@ const R2 = [
 
 const MATCHES = [...R1, ...R2];
 
+// ─── Dynamic Bracket Generator ───────────────────────────────────────────────
+function buildBracket(books) {
+  if (books.length < 2) return { rounds: [], seeds: books };
+  const n = books.length;
+  const totalRounds = Math.ceil(Math.log2(n));
+  const bracketSize = Math.pow(2, totalRounds);
+  const byes = bracketSize - n;
+
+  const seeds = [...books];
+  const rounds = [];
+
+  let r1Matches = [];
+  let pos = 0;
+  for (let i = 0; i < bracketSize / 2; i++) {
+    const a = pos < seeds.length ? seeds[pos++] : null;
+    const b = pos < seeds.length ? seeds[pos++] : null;
+    r1Matches.push({ id: `r1_${i}`, a, b });
+  }
+  rounds.push(r1Matches);
+
+  for (let r = 1; r < totalRounds; r++) {
+    const prev = rounds[r - 1];
+    const rMatches = [];
+    for (let i = 0; i < prev.length; i += 2) {
+      rMatches.push({ id: `r${r + 1}_${i / 2}`, feedA: prev[i].id, feedB: prev[i + 1]?.id || null });
+    }
+    rounds.push(rMatches);
+  }
+  return { rounds, seeds, byes };
+}
+
+function getBracketWinner(matchId, rounds, picks, books) {
+  if (picks[matchId]) return picks[matchId];
+  const round = rounds.find(r => r.some(m => m.id === matchId));
+  if (!round) return null;
+  const match = round.find(m => m.id === matchId);
+  if (!match) return null;
+
+  let a, b;
+  if (match.a !== undefined) {
+    a = match.a;
+    b = match.b;
+  } else {
+    a = match.feedA ? getBracketWinner(match.feedA, rounds, picks, books) : null;
+    b = match.feedB ? getBracketWinner(match.feedB, rounds, picks, books) : null;
+  }
+  if (a && !b) return a;
+  if (b && !a) return b;
+  return null;
+}
+
+function isMatchEmpty(matchId, rounds) {
+  const round = rounds.find(r => r.some(m => m.id === matchId));
+  if (!round) return true;
+  const match = round.find(m => m.id === matchId);
+  if (!match) return true;
+  if (match.a !== undefined) return !match.a && !match.b;
+  const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
+  const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
+  return feedAEmpty && feedBEmpty;
+}
+
 // ─── Storage ──────────────────────────────────────────────────────────────────
 const STORAGE_PREFIX = "botb_";
 const store = {
@@ -1108,11 +1170,58 @@ function Import({ data, save, onDone, year }) {
 
 // ─── Month ────────────────────────────────────────────────────────────────────
 function Month({ data, save, idx, setIdx }) {
-  const [showManual, setShowManual] = useState(false);
-  const [form,       setForm]       = useState({ title:"", author:"", cover:"" });
+  const [showManual,   setShowManual]   = useState(false);
+  const [form,         setForm]         = useState({ title:"", author:"", cover:"" });
+  const [monthBattle,  setMonthBattle]  = useState(null);
+  const [showBracket,  setShowBracket]  = useState(false);
   const swipeX = useRef(null);
   const swipeY = useRef(null);
   const m = data.months[idx];
+  const monthPicks = m.bracketPicks || {};
+
+  // Auto-advance byes (only for genuinely empty opponent slots)
+  useEffect(() => {
+    if (m.books.length < 2) return;
+    const bracket = buildBracket(m.books);
+    const { rounds } = bracket;
+    const picks = m.bracketPicks || {};
+    const newPicks = { ...picks };
+    let changed = false;
+    for (const round of rounds) {
+      for (const match of round) {
+        if (newPicks[match.id]) continue;
+        let a, b;
+        if (match.a !== undefined) { a = match.a; b = match.b; }
+        else {
+          a = match.feedA ? getBracketWinner(match.feedA, rounds, newPicks, m.books) : null;
+          b = match.feedB ? getBracketWinner(match.feedB, rounds, newPicks, m.books) : null;
+        }
+        let isBye = false;
+        if (match.a !== undefined) {
+          isBye = (a && !b) || (!a && b);
+        } else {
+          const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
+          const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
+          isBye = (a && feedBEmpty) || (b && feedAEmpty);
+        }
+        if (isBye) {
+          newPicks[match.id] = a || b;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      const nd = { ...data };
+      nd.months = [...nd.months];
+      nd.months[idx] = { ...m, bracketPicks: newPicks };
+      const finalMatch = rounds[rounds.length - 1]?.[0];
+      if (finalMatch && newPicks[finalMatch.id]) {
+        const champ = getBracketWinner(finalMatch.id, rounds, newPicks, m.books);
+        if (champ) nd.months[idx].winner = champ;
+      }
+      save(nd);
+    }
+  }, [showBracket, m.books.length, JSON.stringify(m.bracketPicks || {})]);
 
   // Swipe left/right to change month
   const onTouchStart = (e) => {
@@ -1124,7 +1233,7 @@ function Month({ data, save, idx, setIdx }) {
     const dx = swipeX.current - e.changedTouches[0].clientX;
     const dy = swipeY.current - e.changedTouches[0].clientY;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      setShowManual(false);
+      setShowManual(false); setShowBracket(false); setMonthBattle(null);
       if (dx > 0) setIdx(Math.min(11, idx + 1));
       else        setIdx(Math.max(0, idx - 1));
     }
@@ -1162,6 +1271,41 @@ function Month({ data, save, idx, setIdx }) {
     save(nd);
   };
 
+  const monthVote = (matchId, book) => {
+    const nd = { ...data };
+    nd.months = [...nd.months];
+    const newPicks = { ...monthPicks, [matchId]: book };
+    nd.months[idx] = { ...m, bracketPicks: newPicks };
+
+    const bracket = buildBracket(m.books);
+    const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
+    if (finalMatch) {
+      const champion = getBracketWinner(finalMatch.id, bracket.rounds, newPicks, m.books);
+      if (champion && newPicks[finalMatch.id]) {
+        nd.months[idx].winner = champion;
+      }
+    }
+    save(nd);
+    setMonthBattle(null);
+  };
+
+  const monthClearVote = (matchId) => {
+    const nd = { ...data };
+    nd.months = [...nd.months];
+    const newPicks = { ...monthPicks };
+    delete newPicks[matchId];
+    nd.months[idx] = { ...m, bracketPicks: newPicks, winner: null };
+    save(nd);
+  };
+
+  const resetMonthBracket = () => {
+    if (!confirm("Reset this month's bracket picks?")) return;
+    const nd = { ...data };
+    nd.months = [...nd.months];
+    nd.months[idx] = { ...m, bracketPicks: {}, winner: null };
+    save(nd);
+  };
+
   const rateBook = (id, rating) => {
     const nd = { ...data };
     nd.months = [...nd.months];
@@ -1171,6 +1315,159 @@ function Month({ data, save, idx, setIdx }) {
     nd.months[idx] = { ...m, books: updatedBooks, winner: updatedWinner };
     save(nd);
   };
+
+  // ── Monthly bracket battle screen ──
+  if (monthBattle && m.books.length >= 2) {
+    const bracket = buildBracket(m.books);
+    const match = bracket.rounds.flat().find(mt => mt.id === monthBattle);
+    if (match) {
+      let a, b;
+      if (match.a !== undefined) { a = match.a; b = match.b; }
+      else {
+        a = match.feedA ? getBracketWinner(match.feedA, bracket.rounds, monthPicks, m.books) : null;
+        b = match.feedB ? getBracketWinner(match.feedB, bracket.rounds, monthPicks, m.books) : null;
+      }
+      const winner = monthPicks[monthBattle];
+      const roundNum = bracket.rounds.findIndex(r => r.some(mt => mt.id === monthBattle)) + 1;
+      const isFinal = roundNum === bracket.rounds.length;
+
+      return (
+        <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+          <button onClick={() => setMonthBattle(null)}
+            style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+            ‹ Back to bracket
+          </button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
+            <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
+          </div>
+          <div style={{ display:"flex", gap:12, position:"relative" }}>
+            {[a, b].map((book) => {
+              if (!book) return null;
+              const won = winner?.id === book?.id;
+              const lost = winner && !won;
+              return (
+                <button key={book?.id} onClick={() => monthVote(monthBattle, book)}
+                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  <Cover book={book} size="lg" />
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontWeight:800, fontSize:13, color:"#1c1917" }}>{book?.title}</div>
+                    {book?.author && <div style={{ fontSize:11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                  </div>
+                  {won && <span style={{ fontSize:22 }}>🏆</span>}
+                </button>
+              );
+            })}
+            <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>
+          </div>
+          {winner && (
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>"{winner.title}" advances!</div>
+              <button onClick={() => monthClearVote(monthBattle)}
+                style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // ── Monthly bracket overview ──
+  if (showBracket && m.books.length >= 2) {
+    const bracket = buildBracket(m.books);
+    const { rounds } = bracket;
+
+    return (
+      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+        <button onClick={() => setShowBracket(false)}
+          style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+          ‹ Back to {FULL[idx]}
+        </button>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>{FULL[idx]} Bracket</div>
+          <div style={{ fontSize:12, color:"#9ca3af", marginTop:2 }}>{m.books.length} books — pick your favourite</div>
+        </div>
+
+        {Object.keys(monthPicks).length > 0 && (
+          <div style={{ display:"flex", justifyContent:"flex-end" }}>
+            <button onClick={resetMonthBracket}
+              style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
+              Reset
+            </button>
+          </div>
+        )}
+
+        {rounds.map((round, ri) => {
+          const isFinal = ri === rounds.length - 1;
+          const roundLabel = isFinal ? "Final" : `Round ${ri + 1}`;
+          return (
+            <div key={ri} style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, textAlign:"center" }}>{roundLabel}</div>
+              <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(round.length, 3)}, 1fr)`, gap:8 }}>
+                {round.map(match => {
+                  let a, b;
+                  if (match.a !== undefined) { a = match.a; b = match.b; }
+                  else {
+                    a = match.feedA ? getBracketWinner(match.feedA, rounds, monthPicks, m.books) : null;
+                    b = match.feedB ? getBracketWinner(match.feedB, rounds, monthPicks, m.books) : null;
+                  }
+                  const winner = monthPicks[match.id];
+                  let autoAdvanced = false;
+                  if (match.a !== undefined) {
+                    autoAdvanced = (a && !b) || (!a && b);
+                  } else {
+                    const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
+                    const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
+                    autoAdvanced = (a && feedBEmpty) || (b && feedAEmpty);
+                  }
+                  const advancee = autoAdvanced ? (a || b) : null;
+                  const ready = a && b && !winner;
+                  const canClick = ready || !!winner;
+
+                  return (
+                    <button key={match.id}
+                      onClick={() => canClick ? setMonthBattle(match.id) : null}
+                      style={{
+                        display:"flex", flexDirection:"column", alignItems:"center", gap:4,
+                        padding:"10px 4px", background: (winner || advancee) ? "#f0fdf4" : "#fff",
+                        border:`2px solid ${(winner || advancee) ? "#22c55e" : ready ? "#4ade80" : "#e7e5e4"}`,
+                        borderRadius:14, cursor: canClick ? "pointer" : "default",
+                        opacity: (!a && !b) ? 0.35 : 1, transition:"all .2s",
+                      }}>
+                      {(winner || advancee) ? (
+                        <>
+                          <Cover book={winner || advancee} size="sm" />
+                          <div style={{ fontSize:9, fontWeight:700, color:"#15803d", lineHeight:1.2, textAlign:"center", maxWidth:80 }}>{(winner || advancee).title}</div>
+                          {autoAdvanced && <div style={{ fontSize:8, color:"#9ca3af" }}>auto-advanced</div>}
+                        </>
+                      ) : ready ? (
+                        <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                          <Cover book={a} size="xs" />
+                          <span style={{ fontSize:9, fontWeight:800, color:"#14532d" }}>vs</span>
+                          <Cover book={b} size="xs" />
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:11, color:"#d6d3d1", padding:"8px 0" }}>?</div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+
+        {m.winner && (
+          <div style={{ background:"linear-gradient(135deg,#166534,#14532d)", borderRadius:20, padding:18, textAlign:"center", color:"#fff" }}>
+            <div style={{ fontSize:10, opacity:.65, textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>Winner</div>
+            <Cover book={m.winner} size="lg" />
+            <div style={{ fontWeight:800, fontSize:16, marginTop:8 }}>{m.winner.title}</div>
+            {m.winner.author && <div style={{ fontSize:12, opacity:.7, marginTop:2 }}>{m.winner.author}</div>}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1193,14 +1490,29 @@ function Month({ data, save, idx, setIdx }) {
         >›</button>
       </div>
 
-      {/* Helper text */}
+      {/* Helper text + bracket button */}
       <div style={{ fontSize:12, color:"#9ca3af", textAlign:"center" }}>
         {m.books.length === 0
-          ? "Add books you read this month, then ⭐ your favourite."
+          ? "Add books you read this month, then pick your favourite."
           : m.winner
-          ? "⭐ is your pick for the bracket. Tap it again to unstar."
-          : "Tap ⭐ to pick your favourite for the bracket."}
+          ? `⭐ ${m.winner.title} is your pick for the bracket.`
+          : "Add your books, then use the bracket to pick your favourite."}
       </div>
+
+      {m.books.length >= 2 && (
+        <button
+          onClick={() => { setShowBracket(true); setMonthBattle(null); }}
+          style={{
+            background: m.winner ? "linear-gradient(135deg,#166534,#14532d)" : "#14532d",
+            color:"#fff", border:"none", borderRadius:14, padding:"14px 16px",
+            fontWeight:800, fontSize:14, cursor:"pointer",
+            display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            boxShadow:"0 2px 8px #14532d44",
+          }}>
+          {m.winner ? `⭐ ${m.winner.title}` : "⚔️ Pick your favourite"}
+          <span style={{ fontSize:11, opacity:.7 }}>→</span>
+        </button>
+      )}
 
       {/* Book list */}
       {m.books.map(book => {
