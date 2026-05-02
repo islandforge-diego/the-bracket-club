@@ -1,1166 +1,26 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const FULL   = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const COLORS  = ["#c0392b","#8e44ad","#2980b9","#16a085","#d35400","#27ae60","#e74c3c","#f39c12","#1abc9c","#e67e22","#9b59b6","#2ecc71"];
+// ─── Shared modules ──────────────────────────────────────────────────────────
+import { MONTHS, FULL, COLORS, R1, R2, MATCHES } from "./shared/constants.js";
+import { buildBracket, getBracketWinner, isMatchEmpty, getR1Winner, getMatchItems } from "./shared/bracket.js";
+import { createStore, freshData, freshTrendingData, migrateStorage } from "./shared/storage.js";
+import { fmtCount } from "./shared/helpers.js";
+import Cover from "./shared/Cover.jsx";
+import ItemSearch from "./shared/ItemSearch.jsx";
 
-const R1 = [
-  { id:"r1_jf", label:"Jan vs Feb",  m1:0,  m2:1  },
-  { id:"r1_ma", label:"Mar vs Apr",  m1:2,  m2:3  },
-  { id:"r1_mj", label:"May vs Jun",  m1:4,  m2:5  },
-  { id:"r1_ja", label:"Jul vs Aug",  m1:6,  m2:7  },
-  { id:"r1_so", label:"Sep vs Oct",  m1:8,  m2:9  },
-  { id:"r1_nd", label:"Nov vs Dec",  m1:10, m2:11 },
-];
+// ─── Book-specific modules ──────────────────────────────────────────────────
+import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, searchBooks } from "./categories/books/data.js";
+import { generateMonthlyCard, generateTop3Card, generateBOTYCard } from "./categories/books/share.js";
 
-const R2 = [
-  { id:"r2_a", label:"Round 2", p1:"r1_jf", p2:"r1_ma" },
-  { id:"r2_b", label:"Round 2", p1:"r1_mj", p2:"r1_ja" },
-  { id:"r2_c", label:"Round 2", p1:"r1_so", p2:"r1_nd" },
-];
+// ─── Book storage instances ─────────────────────────────────────────────────
+const store = createStore("botb_");
+const trendingStore = createStore("botb_pop_");
 
-const MATCHES = [...R1, ...R2];
-
-// ─── Dynamic Bracket Generator ───────────────────────────────────────────────
-function buildBracket(books) {
-  if (books.length < 2) return { rounds: [], seeds: books };
-
-  const seeds = [...books];
-  const rounds = [];
-
-  const r1 = [];
-  let pos = 0;
-  const pairCount = Math.floor(seeds.length / 2);
-  for (let i = 0; i < pairCount; i++) {
-    const match = { id: `r1_${i}`, a: seeds[pos++], b: seeds[pos++] };
-    if (i === pairCount - 1 && seeds.length % 2 === 1) {
-      match.c = seeds[pos++];
-    }
-    r1.push(match);
-  }
-  rounds.push(r1);
-
-  let roundNum = 2;
-  while (rounds[rounds.length - 1].length > 1) {
-    const prev = rounds[rounds.length - 1];
-    const prevLen = prev.length;
-    const matchCount = Math.floor(prevLen / 2);
-    const rnd = [];
-    let fi = 0;
-    for (let i = 0; i < matchCount; i++) {
-      const match = { id: `r${roundNum}_${i}`, feedA: prev[fi++].id, feedB: prev[fi++].id };
-      if (i === matchCount - 1 && prevLen % 2 === 1) {
-        match.feedC = prev[fi++].id;
-      }
-      rnd.push(match);
-    }
-    rounds.push(rnd);
-    roundNum++;
-  }
-  return { rounds, seeds };
-}
-
-function getBracketWinner(matchId, rounds, picks) {
-  return picks[matchId] || null;
-}
-
-function isMatchEmpty(matchId, rounds) {
-  const round = rounds.find(r => r.some(m => m.id === matchId));
-  if (!round) return true;
-  const match = round.find(m => m.id === matchId);
-  if (!match) return true;
-  if (match.a !== undefined) return !match.a && !match.b;
-  const feedAEmpty = match.feedA ? isMatchEmpty(match.feedA, rounds) : true;
-  const feedBEmpty = match.feedB ? isMatchEmpty(match.feedB, rounds) : true;
-  return feedAEmpty && feedBEmpty;
-}
-
-// ─── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_PREFIX = "botb_";
-const store = {
-  get: (year) => {
-    try { const v = localStorage.getItem(STORAGE_PREFIX + year); return v ? JSON.parse(v) : null; }
-    catch { return null; }
-  },
-  set: (year, val) => {
-    try { localStorage.setItem(STORAGE_PREFIX + year, JSON.stringify(val)); }
-    catch (e) { console.error("Save failed:", e); }
-  },
-};
-
-function migrateStorage() {
-  const old = localStorage.getItem("botb26");
-  if (old && !localStorage.getItem("botb_2026")) {
-    localStorage.setItem("botb_2026", old);
-  }
-  if (old) localStorage.removeItem("botb26");
-}
-
-function freshData() {
-  return {
-    months: MONTHS.map(() => ({ books: [], winner: null })),
-    bracket: {},
-  };
-}
-
-const popStore = {
-  get: (year) => {
-    try { const v = localStorage.getItem("botb_pop_" + year); return v ? JSON.parse(v) : null; }
-    catch { return null; }
-  },
-  set: (year, val) => {
-    try { localStorage.setItem("botb_pop_" + year, JSON.stringify(val)); }
-    catch (e) { console.error("Save failed:", e); }
-  },
-};
-
-function freshPopData() {
-  return {
-    months: MONTHS.map(() => ({ books: [], winner: null, bracketPicks: {} })),
-    bracket: {},
-  };
-}
-
-// ─── Goodreads CSV Parser ─────────────────────────────────────────────────────
-function parseCSVLine(line) {
-  const result = [];
-  let cur = "", inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') {
-      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQ = !inQ;
-    } else if (c === ',' && !inQ) {
-      result.push(cur); cur = "";
-    } else {
-      cur += c;
-    }
-  }
-  result.push(cur);
-  return result;
-}
-
-function parseGoodreadsCSV(text, targetYear) {
-  const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
-  if (lines.length < 2) return [];
-  const headers = parseCSVLine(lines[0]).map(h => h.trim());
-  const books = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCSVLine(lines[i]);
-    const row  = {};
-    headers.forEach((h, j) => { row[h] = (vals[j] || "").trim(); });
-
-    if (row["Exclusive Shelf"] !== "read") continue;
-
-    const dm = row["Date Read"].match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
-    if (!dm) continue;
-    const year = parseInt(dm[1]);
-    const month = parseInt(dm[2]) - 1;
-    if (year !== targetYear || month < 0 || month > 11) continue;
-
-    const rawRating = parseInt(row["My Rating"]);
-    books.push({
-      title:  row["Title"]  || "",
-      author: row["Author"] || "",
-      rating: rawRating >= 1 && rawRating <= 5 ? rawRating : null,
-      month,
-      cover:  "",
-    });
-  }
-  return books;
-}
-
-// ─── Goodreads RSS Parser ────────────────────────────────────────────────────
-function extractGoodreadsUserId(input) {
-  const m = input.match(/goodreads\.com\/review\/list(?:_rss)?\/(\d+)/);
-  return m ? m[1] : null;
-}
-
-async function fetchGoodreadsRSS(userId, page = 1) {
-  const rssPath = `/review/list_rss/${userId}?shelf=read&per_page=200&page=${page}`;
-  const res = await fetch(`/api/goodreads?path=${encodeURIComponent(rssPath)}`);
-  if (!res.ok) throw new Error("Failed to fetch Goodreads data");
-  return await res.text();
-}
-
-function parseGoodreadsRSS(xmlText, targetYear) {
-  return parseGoodreadsRSSAll(xmlText).filter(b => b.year === targetYear);
-}
-
-function parseGoodreadsRSSAll(xmlText) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xmlText, "text/xml");
-  const items = doc.querySelectorAll("item");
-  const books = [];
-
-  items.forEach(item => {
-    const dateStr = item.querySelector("user_read_at")?.textContent?.trim();
-    if (!dateStr) return;
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return;
-
-    const title = item.querySelector("title")?.textContent?.trim() || "";
-    const author = item.querySelector("author_name")?.textContent?.trim() || "";
-    const cover = item.querySelector("book_large_image_url")?.textContent?.trim() || item.querySelector("book_image_url")?.textContent?.trim() || "";
-    const ratingStr = item.querySelector("user_rating")?.textContent?.trim();
-    const rating = parseInt(ratingStr);
-
-    books.push({
-      title,
-      author,
-      rating: rating >= 1 && rating <= 5 ? rating : null,
-      year: d.getFullYear(),
-      month: d.getMonth(),
-      cover: cover && !cover.includes("nophoto") ? cover : "",
-    });
-  });
-  return books;
-}
-
-async function fetchAllGoodreadsBooks(userId) {
-  const allBooks = [];
-  for (let page = 1; page <= 10; page++) {
-    const xml = await fetchGoodreadsRSS(userId, page);
-    const books = parseGoodreadsRSSAll(xml);
-    if (books.length === 0) break;
-    allBooks.push(...books);
-    if (books.length < 200) break;
-  }
-  return allBooks;
-}
-
-// ─── Goodreads Popular Books ─────────────────────────────────────────────────
-async function fetchPopularBooks(year, month) {
-  const path = `/book/popular_by_date/${year}/${month + 1}`;
-  const res = await fetch(`/api/goodreads?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error("Failed to fetch popular books");
-  const html = await res.text();
-  return parsePopularBooksHTML(html);
-}
-
-function parsePopularBooksHTML(html) {
-  const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
-  if (!match) return [];
-  const data = JSON.parse(match[1]);
-  const apollo = data.props?.pageProps?.apolloState;
-  if (!apollo) return [];
-  const rootQ = apollo.ROOT_QUERY;
-  const topListKey = Object.keys(rootQ).find(k => k.startsWith("getTopList"));
-  const topList = rootQ?.[topListKey];
-  if (!topList?.edges) return [];
-  return topList.edges.slice(0, 12).map((edge, idx) => {
-    const bookRef = edge.node?.__ref;
-    const book = bookRef ? apollo[bookRef] : null;
-    if (!book) return null;
-    const contribRef = book.primaryContributorEdge?.node?.__ref;
-    const contrib = contribRef ? apollo[contribRef] : null;
-    const workRef = book.work?.__ref;
-    const work = workRef ? apollo[workRef] : null;
-    return {
-      id: book.legacyId || Date.now() + idx,
-      title: book.titleComplete || book.title || "",
-      author: contrib?.name || "",
-      cover: book.imageUrl || "",
-      rating: work?.stats?.averageRating ? Math.round(work.stats.averageRating) : null,
-      avgRating: work?.stats?.averageRating || null,
-      ratingsCount: work?.stats?.ratingsCount || 0,
-      popularity: edge.count || 0,
-    };
-  }).filter(Boolean);
-}
-
-function fmtCount(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
-  if (n >= 1000) return Math.floor(n / 1000) + "K";
-  return String(n);
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function getR1Winner(match, months, bracket) {
-  if (bracket[match.id]) return bracket[match.id];
-  const b1 = months[match.m1]?.winner;
-  const b2 = months[match.m2]?.winner;
-  if (b1 && !b2) return b1;
-  if (b2 && !b1) return b2;
-  return null;
-}
-
+// ─── Helpers ────────────────────────────────────────────────────────────────
 function getBooks(match, months, bracket) {
-  if (match.m1 !== undefined) {
-    return { b1: months[match.m1]?.winner || null, b2: months[match.m2]?.winner || null };
-  }
-  const r1a = R1.find(r => r.id === match.p1);
-  const r1b = R1.find(r => r.id === match.p2);
-  return {
-    b1: r1a ? getR1Winner(r1a, months, bracket) : (bracket[match.p1] || null),
-    b2: r1b ? getR1Winner(r1b, months, bracket) : (bracket[match.p2] || null),
-  };
+  return getMatchItems(match, months, bracket, R1);
 }
 
-async function shareProgress(data, year) {
-  const lines = [`⚔️ The Bracket Club — Battle of the Books ${year}`, ""];
-  const champion = data.bracket["final"];
-  if (champion) {
-    lines.push(`🏆 Best Read of ${year}: "${champion.title}"${champion.author ? ` by ${champion.author}` : ""}`, "");
-  }
-  const hasWinners = data.months.some(m => m.winner);
-  if (hasWinners) {
-    lines.push("📚 Monthly Champions:");
-    data.months.forEach((m, i) => {
-      if (m.winner) lines.push(`  ${MONTHS[i]}: ${m.winner.title}`);
-    });
-  } else {
-    lines.push("Just getting started — 0 months crowned!");
-  }
-  lines.push("", "🌐 thebracket.club");
-  const text = lines.join("\n");
-  try {
-    if (navigator.share) {
-      await navigator.share({ title: "The Bracket Club", text });
-      return "shared";
-    } else {
-      await navigator.clipboard.writeText(text);
-      return "copied";
-    }
-  } catch (e) {
-    if (e.name !== "AbortError") {
-      try { await navigator.clipboard.writeText(text); return "copied"; } catch {}
-    }
-    return "cancelled";
-  }
-}
-
-// ─── Share Image Generator ───────────────────────────────────────────────────
-function loadImage(src) {
-  return new Promise((resolve) => {
-    if (!src) return resolve(null);
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-}
-
-function drawCover(ctx, book, x, y, w, h) {
-  const color = COLORS[(book?.title?.charCodeAt(0) || 0) % COLORS.length];
-  const r = 8;
-  ctx.save();
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.clip();
-
-  let drawn = false;
-  if (book?._coverImg) {
-    try {
-      const img = book._coverImg;
-      const scale = Math.max(w / img.width, h / img.height);
-      const sw = img.width * scale, sh = img.height * scale;
-      ctx.drawImage(img, x + (w - sw) / 2, y + (h - sh) / 2, sw, sh);
-      drawn = true;
-    } catch {}
-  }
-  if (!drawn) {
-    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
-    grad.addColorStop(0, color + "bb");
-    grad.addColorStop(1, color);
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = "#fff";
-    ctx.font = `bold ${Math.max(10, w * 0.12)}px system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const title = book?.title?.slice(0, 18) || "?";
-    ctx.fillText(title, x + w / 2, y + h / 2, w - 8);
-  }
-  ctx.restore();
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.strokeStyle = "#00000022";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.restore();
-}
-
-async function generateShareImage(data, year) {
-  const W = 1080, H = 1350;
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-
-  const safeTop = 50, safeBot = 110;
-  const CX = W / 2 - 20;
-  const PAD = 40;
-
-  const months = data.months;
-  const b = data.bracket || {};
-  const champion = b["final"];
-  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
-  const starCount = months.filter(m => m.winner).length;
-  const filledMonths = months.map((m, i) => ({ ...m, idx: i })).filter(m => m.winner);
-
-  const r1Winners = R1.map(match => getR1Winner(match, months, b));
-  const top3 = R2.map(match => {
-    if (b[match.id]) return b[match.id];
-    const w1 = r1Winners[R1.findIndex(r => r.id === match.p1)];
-    const w2 = r1Winners[R1.findIndex(r => r.id === match.p2)];
-    if (w1 && !w2) return w1;
-    if (w2 && !w1) return w2;
-    return null;
-  }).filter(Boolean);
-
-  const allBooks = [...months.map(m => m.winner).filter(Boolean), ...top3, champion].filter(Boolean);
-  const unique = [...new Map(allBooks.map(bk => [bk.id || bk.title, bk])).values()];
-  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
-
-  // ── Background ──
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-  bgGrad.addColorStop(0, "#14532d");
-  bgGrad.addColorStop(0.35, "#166534");
-  bgGrad.addColorStop(1, "#0f3d1f");
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.fillStyle = "#ffffff06";
-  for (let i = 0; i < W; i += 40) {
-    for (let j = 0; j < H; j += 40) {
-      if ((i + j) % 80 === 0) ctx.fillRect(i, j, 20, 20);
-    }
-  }
-
-  // ── Header ──
-  let y = safeTop + 10;
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 62px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.letterSpacing = "12px";
-  ctx.fillText("THE BRACKET CLUB", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 76;
-
-  ctx.fillStyle = "#ffffff88";
-  ctx.font = "600 36px system-ui, sans-serif";
-  ctx.fillText(`Battle of the Books ${year}`, CX, y);
-  y += 56;
-
-  ctx.strokeStyle = "#ffffff33";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD + 40, y);
-  ctx.lineTo(W - PAD - 40, y);
-  ctx.stroke();
-  y += 20;
-
-  const usableW = W - PAD * 2;
-  const footerStart = H - safeBot;
-
-  // ── Section 1: Monthly Picks (only show filled months) ──
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "800 32px system-ui, sans-serif";
-  ctx.letterSpacing = "6px";
-  ctx.fillText("MONTHLY PICKS", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 44;
-
-  if (filledMonths.length > 0) {
-    const cols = Math.min(filledMonths.length, 6);
-    const rows = Math.ceil(filledMonths.length / cols);
-    const maxCoverH = Math.min(180, Math.floor((footerStart - y - 500) / rows - 44));
-    const cw = Math.floor(maxCoverH / 1.45);
-    const cg = Math.min(24, Math.floor((usableW - cols * cw) / Math.max(cols - 1, 1)));
-    const totalGridW = cols * cw + (cols - 1) * cg;
-    const gridX = CX - totalGridW / 2;
-
-    for (let fi = 0; fi < filledMonths.length; fi++) {
-      const fm = filledMonths[fi];
-      const col = fi % cols, row = Math.floor(fi / cols);
-      const x = gridX + col * (cw + cg);
-      const cy = y + row * (maxCoverH + 44);
-
-      ctx.fillStyle = "#00000077";
-      ctx.beginPath();
-      const lblW = cw + 12, lblH = 28;
-      ctx.roundRect(x + cw / 2 - lblW / 2, cy - 4, lblW, lblH, 5);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "800 22px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(MONTHS[fm.idx].toUpperCase(), x + cw / 2, cy + 2);
-
-      drawCover(ctx, fm.winner, x, cy + 28, cw, maxCoverH);
-    }
-    y += rows * (maxCoverH + 44) + 12;
-  } else {
-    ctx.fillStyle = "#ffffff44";
-    ctx.font = "500 28px system-ui, sans-serif";
-    ctx.fillText("No monthly picks yet", CX, y + 10);
-    y += 50;
-  }
-
-  // ── Section 2: Top 3 Books ──
-  ctx.strokeStyle = "#ffffff22";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD + 20, y);
-  ctx.lineTo(W - PAD - 20, y);
-  ctx.stroke();
-  y += 16;
-
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "800 32px system-ui, sans-serif";
-  ctx.letterSpacing = "6px";
-  ctx.textAlign = "center";
-  ctx.fillText("TOP 3", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 44;
-
-  const remainingForT3AndBoty = footerStart - y;
-  const t3Section = champion ? Math.floor(remainingForT3AndBoty * 0.45) : Math.floor(remainingForT3AndBoty * 0.65);
-  const t3H = Math.min(260, t3Section - 60);
-  const t3W = Math.floor(t3H / 1.45);
-  const actualCount = top3.length;
-  const t3Gap = actualCount > 1 ? Math.min(28, Math.floor((usableW - actualCount * t3W) / (actualCount - 1))) : 0;
-  const t3TotalW = actualCount * t3W + Math.max(0, actualCount - 1) * t3Gap;
-  const t3X = CX - t3TotalW / 2;
-
-  for (let i = 0; i < actualCount; i++) {
-    const book = top3[i];
-    const x = t3X + i * (t3W + t3Gap);
-    drawCover(ctx, book, x, y, t3W, t3H);
-
-    ctx.font = "800 24px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    const titleLines = wrapText(ctx, book.title, t3W + 30);
-    const displayLines = titleLines.slice(0, 2);
-    if (titleLines.length > 2) displayLines[1] = displayLines[1].replace(/\s+\S*$/, "…");
-    const tlH = displayLines.length * 30 + 10;
-    ctx.fillStyle = "#00000066";
-    ctx.beginPath();
-    ctx.roundRect(x - 8, y + t3H + 8, t3W + 16, tlH, 8);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    displayLines.forEach((line, li) => {
-      ctx.fillText(line, x + t3W / 2, y + t3H + 30 + li * 30);
-    });
-  }
-
-  if (actualCount === 0) {
-    ctx.fillStyle = "#ffffff44";
-    ctx.font = "500 28px system-ui, sans-serif";
-    ctx.fillText("Keep reading to fill your Top 3!", CX, y + 20);
-    y += 60;
-  } else {
-    y += t3H + (actualCount > 0 ? 80 : 0);
-  }
-
-  // ── Section 3: Book of the Year ──
-  ctx.strokeStyle = "#ffffff22";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD + 20, y);
-  ctx.lineTo(W - PAD - 20, y);
-  ctx.stroke();
-  y += 16;
-
-  if (champion) {
-    const botySpace = footerStart - y - 10;
-    const champH = Math.min(220, botySpace - 40);
-    const champW = Math.floor(champH / 1.45);
-    const boxW = Math.min(usableW, champW + 400);
-    const boxH = champH + 40;
-    const boxX = CX - boxW / 2;
-
-    ctx.fillStyle = "#fbbf2415";
-    ctx.beginPath();
-    ctx.roundRect(boxX, y, boxW, boxH, 20);
-    ctx.fill();
-    ctx.strokeStyle = "#fbbf2455";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    const coverX = boxX + 28;
-    drawCover(ctx, champion, coverX, y + 20, champW, champH);
-
-    const textX = coverX + champW + 32;
-    const textMaxW = boxX + boxW - textX - 24;
-
-    ctx.fillStyle = "#fbbf24";
-    ctx.font = "800 28px system-ui, sans-serif";
-    ctx.letterSpacing = "5px";
-    ctx.textAlign = "left";
-    ctx.fillText("BOOK OF THE YEAR", textX, y + 40);
-    ctx.letterSpacing = "0px";
-
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 38px system-ui, sans-serif";
-    const champLines = wrapText(ctx, champion.title, textMaxW);
-    champLines.slice(0, 2).forEach((line, li) => {
-      ctx.fillText(line, textX, y + 86 + li * 46);
-    });
-
-    if (champion.author) {
-      const authY = y + 86 + Math.min(champLines.length, 2) * 46 + 10;
-      ctx.fillStyle = "#ffffffbb";
-      ctx.font = "500 28px system-ui, sans-serif";
-      ctx.fillText(champion.author, textX, authY);
-    }
-
-    ctx.fillStyle = "#fbbf24";
-    ctx.font = "56px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("🏆", textX + textMaxW / 2, y + champH - 10);
-  } else {
-    ctx.fillStyle = "#ffffff15";
-    ctx.beginPath();
-    ctx.roundRect(CX - 160, y, 320, 110, 16);
-    ctx.fill();
-    ctx.fillStyle = "#ffffff66";
-    ctx.font = "800 28px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("BOOK OF THE YEAR", CX, y + 42);
-    ctx.font = "44px system-ui, sans-serif";
-    ctx.fillText("👑", CX, y + 82);
-  }
-
-  // ── Stats Footer ──
-  const footerY = footerStart + 8;
-  ctx.strokeStyle = "#ffffff22";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD + 20, footerY);
-  ctx.lineTo(W - PAD - 20, footerY);
-  ctx.stroke();
-
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "700 30px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 34);
-
-  ctx.fillStyle = "#ffffffaa";
-  ctx.font = "700 26px system-ui, sans-serif";
-  ctx.fillText("thebracket.club", CX, footerY + 72);
-
-  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
-}
-
-function wrapText(ctx, text, maxWidth) {
-  const words = text.split(" ");
-  const lines = [];
-  let current = "";
-  for (const word of words) {
-    const test = current ? current + " " + word : word;
-    if (ctx.measureText(test).width > maxWidth && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = test;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.length ? lines : [text];
-}
-
-async function shareImage(data, year) {
-  const blob = await generateShareImage(data, year);
-  const file = new File([blob], `bracket-club-${year}.png`, { type: "image/png" });
-
-  if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: "The Bracket Club" });
-      return "shared";
-    } catch (e) {
-      if (e.name === "AbortError") return "cancelled";
-    }
-  }
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `bracket-club-${year}.png`;
-  a.click();
-  URL.revokeObjectURL(url);
-  return "downloaded";
-}
-
-// ─── Share Card Generators ──────────────────────────────────────────────────
-function drawCardBg(ctx, W, H) {
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-  bgGrad.addColorStop(0, "#14532d");
-  bgGrad.addColorStop(0.35, "#166534");
-  bgGrad.addColorStop(1, "#0f3d1f");
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = "#ffffff06";
-  for (let i = 0; i < W; i += 40) {
-    for (let j = 0; j < H; j += 40) {
-      if ((i + j) % 80 === 0) ctx.fillRect(i, j, 20, 20);
-    }
-  }
-}
-
-function drawCardHeader(ctx, W, year) {
-  const CX = W / 2;
-  let y = 60;
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 62px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.letterSpacing = "12px";
-  ctx.fillText("THE BRACKET CLUB", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 76;
-  ctx.fillStyle = "#ffffff88";
-  ctx.font = "600 36px system-ui, sans-serif";
-  ctx.fillText(`Battle of the Books ${year}`, CX, y);
-  y += 56;
-  ctx.strokeStyle = "#ffffff33";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(80, y);
-  ctx.lineTo(W - 80, y);
-  ctx.stroke();
-  return y + 20;
-}
-
-function drawCardFooter(ctx, W, H, bookCount, starCount) {
-  const CX = W / 2;
-  const footerY = H - 102;
-  ctx.strokeStyle = "#ffffff22";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(60, footerY);
-  ctx.lineTo(W - 60, footerY);
-  ctx.stroke();
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "700 30px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 34);
-  ctx.fillStyle = "#ffffffaa";
-  ctx.font = "700 26px system-ui, sans-serif";
-  ctx.fillText("thebracket.club", CX, footerY + 72);
-}
-
-async function generateMonthlyCard(data, year) {
-  const W = 1080, H = 1350;
-  const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  const CX = W / 2;
-  const months = data.months;
-  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
-  const starCount = months.filter(m => m.winner).length;
-
-  const winners = months.map(m => m.winner).filter(Boolean);
-  const unique = [...new Map(winners.map(b => [b.id || b.title, b])).values()];
-  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
-
-  drawCardBg(ctx, W, H);
-  let y = drawCardHeader(ctx, W, year);
-
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "800 36px system-ui, sans-serif";
-  ctx.letterSpacing = "6px";
-  ctx.textAlign = "center";
-  ctx.fillText("MONTHLY PICKS", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 54;
-
-  const cols = 4, rows = 3;
-  const footerStart = H - 110;
-  const availH = footerStart - y - 10;
-  const gapX = 20, gapY = 12;
-  const cellH = Math.floor((availH - (rows - 1) * gapY) / rows);
-  const labelH = 34;
-  const coverH = cellH - labelH - 6;
-  const coverW = Math.floor(coverH / 1.45);
-  const totalGridW = cols * coverW + (cols - 1) * gapX;
-  const gridX = CX - totalGridW / 2;
-
-  for (let i = 0; i < 12; i++) {
-    const col = i % cols, row = Math.floor(i / cols);
-    const x = gridX + col * (coverW + gapX);
-    const cy = y + row * (cellH + gapY);
-    const winner = months[i].winner;
-
-    ctx.fillStyle = "#00000066";
-    ctx.beginPath();
-    const lblW = coverW + 8;
-    ctx.roundRect(x + coverW / 2 - lblW / 2, cy, lblW, labelH - 2, 6);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = "800 22px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(MONTHS[i].toUpperCase(), x + coverW / 2, cy + 8);
-
-    if (winner) {
-      drawCover(ctx, winner, x, cy + labelH, coverW, coverH);
-    } else {
-      ctx.save();
-      ctx.fillStyle = "#ffffff11";
-      ctx.beginPath();
-      ctx.roundRect(x, cy + labelH, coverW, coverH, 8);
-      ctx.fill();
-      ctx.strokeStyle = "#ffffff22";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-      ctx.fillStyle = "#ffffff33";
-      ctx.font = "500 24px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("TBD", x + coverW / 2, cy + labelH + coverH / 2 + 8);
-    }
-  }
-
-  drawCardFooter(ctx, W, H, bookCount, starCount);
-  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
-}
-
-async function generateTop3Card(data, year) {
-  const W = 1080, H = 1350;
-  const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  const CX = W / 2;
-  const months = data.months;
-  const b = data.bracket || {};
-  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
-  const starCount = months.filter(m => m.winner).length;
-
-  const r1Winners = R1.map(match => getR1Winner(match, months, b));
-  const top3 = R2.map(match => {
-    if (b[match.id]) return b[match.id];
-    const w1 = r1Winners[R1.findIndex(r => r.id === match.p1)];
-    const w2 = r1Winners[R1.findIndex(r => r.id === match.p2)];
-    if (w1 && !w2) return w1;
-    if (w2 && !w1) return w2;
-    return null;
-  }).filter(Boolean);
-
-  const unique = [...new Map(top3.map(bk => [bk.id || bk.title, bk])).values()];
-  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
-
-  drawCardBg(ctx, W, H);
-  let y = drawCardHeader(ctx, W, year);
-
-  ctx.fillStyle = "#ffffffcc";
-  ctx.font = "800 40px system-ui, sans-serif";
-  ctx.letterSpacing = "6px";
-  ctx.textAlign = "center";
-  ctx.fillText("TOP 3", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 64;
-
-  if (top3.length > 0) {
-    const footerStart = H - 110;
-    const textBelow = 110;
-    const maxCoverH = Math.min(520, footerStart - y - textBelow - 20);
-    const maxCoverW = Math.floor(maxCoverH / 1.45);
-    const maxPerCard = Math.floor((W - 100 - (top3.length - 1) * 24) / top3.length);
-    const coverW = Math.min(maxCoverW, maxPerCard);
-    const coverH = Math.floor(coverW * 1.45);
-    const gap = Math.min(32, Math.floor((W - 100 - top3.length * coverW) / Math.max(top3.length - 1, 1)));
-    const totalW = top3.length * coverW + Math.max(0, top3.length - 1) * gap;
-    const startX = CX - totalW / 2;
-
-    const ranks = ["\u{1F947}", "\u{1F948}", "\u{1F949}"];
-    for (let i = 0; i < top3.length; i++) {
-      const book = top3[i];
-      const x = startX + i * (coverW + gap);
-
-      ctx.font = "48px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(ranks[i] || "", x + coverW / 2, y - 2);
-
-      drawCover(ctx, book, x, y + 14, coverW, coverH);
-
-      ctx.font = "bold 26px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      const titleLines = wrapText(ctx, book.title, coverW + 30);
-      const displayLines = titleLines.slice(0, 2);
-      if (titleLines.length > 2) displayLines[1] = displayLines[1].replace(/\s+\S*$/, "…");
-
-      const tlH = displayLines.length * 32 + 14;
-      ctx.fillStyle = "#00000055";
-      ctx.beginPath();
-      ctx.roundRect(x - 8, y + coverH + 22, coverW + 16, tlH, 8);
-      ctx.fill();
-
-      ctx.fillStyle = "#fff";
-      displayLines.forEach((line, li) => {
-        ctx.fillText(line, x + coverW / 2, y + coverH + 46 + li * 32);
-      });
-
-      if (book.author) {
-        ctx.fillStyle = "#ffffffaa";
-        ctx.font = "500 20px system-ui, sans-serif";
-        ctx.fillText(book.author, x + coverW / 2, y + coverH + 46 + displayLines.length * 32 + 6);
-      }
-    }
-  } else {
-    ctx.fillStyle = "#ffffff44";
-    ctx.font = "500 32px system-ui, sans-serif";
-    ctx.fillText("Keep battling to reveal your Top 3!", CX, y + 60);
-  }
-
-  drawCardFooter(ctx, W, H, bookCount, starCount);
-  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
-}
-
-async function generateBOTYCard(data, year) {
-  const W = 1080, H = 1350;
-  const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  const CX = W / 2;
-  const months = data.months;
-  const b = data.bracket || {};
-  const champion = b["final"];
-  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
-  const starCount = months.filter(m => m.winner).length;
-
-  if (champion) champion._coverImg = await loadImage(champion.cover);
-
-  drawCardBg(ctx, W, H);
-  let y = drawCardHeader(ctx, W, year);
-
-  ctx.font = "80px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("\u{1F3C6}", CX, y + 20);
-  y += 110;
-
-  ctx.fillStyle = "#fbbf24";
-  ctx.font = "800 44px system-ui, sans-serif";
-  ctx.letterSpacing = "8px";
-  ctx.fillText("BOOK OF THE YEAR", CX, y);
-  ctx.letterSpacing = "0px";
-  y += 64;
-
-  if (champion) {
-    const footerStart = H - 110;
-    const textBelow = 130;
-    const champH = Math.min(520, footerStart - y - textBelow);
-    const champW = Math.floor(champH / 1.45);
-    const coverX = CX - champW / 2;
-
-    ctx.save();
-    ctx.shadowColor = "#fbbf2444";
-    ctx.shadowBlur = 40;
-    drawCover(ctx, champion, coverX, y, champW, champH);
-    ctx.restore();
-
-    ctx.strokeStyle = "#fbbf24";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.roundRect(coverX - 2, y - 2, champW + 4, champH + 4, 10);
-    ctx.stroke();
-
-    y += champH + 28;
-
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 42px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    const titleLines = wrapText(ctx, champion.title, W - 160);
-    titleLines.slice(0, 2).forEach((line, li) => {
-      ctx.fillText(line, CX, y + li * 50);
-    });
-    y += Math.min(titleLines.length, 2) * 50;
-
-    if (champion.author) {
-      ctx.fillStyle = "#ffffffbb";
-      ctx.font = "500 32px system-ui, sans-serif";
-      ctx.fillText(champion.author, CX, y + 10);
-    }
-  } else {
-    ctx.fillStyle = "#ffffff15";
-    ctx.beginPath();
-    ctx.roundRect(CX - 180, y, 360, 280, 20);
-    ctx.fill();
-    ctx.fillStyle = "#ffffff44";
-    ctx.font = "500 30px system-ui, sans-serif";
-    ctx.fillText("Complete the bracket", CX, y + 110);
-    ctx.fillText("to crown your champion!", CX, y + 155);
-    ctx.font = "64px system-ui, sans-serif";
-    ctx.fillText("\u{1F451}", CX, y + 240);
-  }
-
-  drawCardFooter(ctx, W, H, bookCount, starCount);
-  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
-}
-
-// ─── Cover Component ──────────────────────────────────────────────────────────
-const COVER_SIZES = { xs:[28,40], sm:[40,56], md:[56,80], lg:[96,128], xl:[128,176] };
-
-function Cover({ book, size = "md" }) {
-  const [w, h] = COVER_SIZES[size];
-  const [err, setErr] = useState(false);
-  const color = COLORS[(book?.title?.charCodeAt(0) || 0) % COLORS.length];
-  const base = { width:w, height:h, borderRadius:6, flexShrink:0, boxShadow:"0 1px 4px #0002" };
-
-  if (book?.cover && !err) {
-    return (
-      <img
-        src={book.cover}
-        alt={book.title}
-        style={{ ...base, objectFit:"cover" }}
-        onError={() => setErr(true)}
-      />
-    );
-  }
-  return (
-    <div style={{
-      ...base,
-      background: `linear-gradient(160deg, ${color}bb, ${color})`,
-      display:"flex", alignItems:"flex-end", justifyContent:"center",
-      paddingBottom:4, paddingLeft:3, paddingRight:3,
-    }}>
-      <span style={{
-        color:"#fff", textAlign:"center", fontWeight:700,
-        lineHeight:1.2, fontSize: h > 80 ? 9 : 7, wordBreak:"break-word",
-      }}>
-        {book?.title?.slice(0, 22) || "?"}
-      </span>
-    </div>
-  );
-}
-
-// ─── Book Search (Open Library) ───────────────────────────────────────────────
-function BookSearch({ onSelect, onManual }) {
-  const [query, setQuery]     = useState("");
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen]       = useState(false);
-  const timerRef = useRef(null);
-  const wrapRef  = useRef(null);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  const doSearch = useCallback(async (q) => {
-    if (!q.trim()) { setResults([]); setLoading(false); return; }
-    setLoading(true);
-    try {
-      const res  = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=title,author_name,cover_i&limit=6`);
-      const data = await res.json();
-      setResults((data.docs || []).map(d => ({
-        title:  d.title || "",
-        author: d.author_name?.[0] || "",
-        cover:  d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg` : "",
-      })));
-      setOpen(true);
-    } catch {
-      setResults([]);
-    }
-    setLoading(false);
-  }, []);
-
-  const handleChange = (e) => {
-    const q = e.target.value;
-    setQuery(q);
-    clearTimeout(timerRef.current);
-    if (q.trim()) {
-      timerRef.current = setTimeout(() => doSearch(q), 420);
-    } else {
-      setResults([]);
-      setOpen(false);
-    }
-  };
-
-  const pick = (book) => {
-    onSelect(book);
-    setQuery("");
-    setResults([]);
-    setOpen(false);
-  };
-
-  const showDropdown = open && (results.length > 0 || (query.trim() && !loading));
-
-  return (
-    <div ref={wrapRef} style={{ position:"relative" }}>
-      <div style={{
-        display:"flex", alignItems:"center", gap:8,
-        border:"1.5px solid #e7e5e4", borderRadius:12,
-        padding:"9px 12px", background:"#fff",
-      }}>
-        <span style={{ fontSize:16, flexShrink:0 }}>{loading ? "⏳" : "🔍"}</span>
-        <input
-          value={query}
-          onChange={handleChange}
-          onFocus={() => results.length > 0 && setOpen(true)}
-          placeholder="Search for a book..."
-          style={{ border:"none", outline:"none", flex:1, fontSize:13, background:"transparent", color:"#1c1917" }}
-        />
-        {query && (
-          <button
-            onClick={() => { setQuery(""); setResults([]); setOpen(false); }}
-            style={{ background:"none", border:"none", color:"#a8a29e", fontSize:14, cursor:"pointer", padding:0, flexShrink:0 }}
-          >✕</button>
-        )}
-      </div>
-
-      {showDropdown && (
-        <div style={{
-          position:"absolute", top:"calc(100% + 6px)", left:0, right:0,
-          background:"#fff", borderRadius:14, boxShadow:"0 8px 30px #0003",
-          zIndex:100, overflow:"hidden", border:"1px solid #e7e5e4",
-        }}>
-          {results.length > 0 ? (
-            results.map((book, i) => (
-              <button
-                key={i}
-                onClick={() => pick(book)}
-                style={{
-                  width:"100%", display:"flex", alignItems:"center", gap:10,
-                  padding:"10px 12px", border:"none",
-                  borderBottom: i < results.length - 1 ? "1px solid #f5f5f4" : "none",
-                  background:"none", cursor:"pointer", textAlign:"left",
-                }}
-              >
-                <Cover book={book} size="xs" />
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:700, fontSize:13, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {book.title}
-                  </div>
-                  <div style={{ fontSize:11, color:"#78716c", marginTop:1 }}>
-                    {book.author || "Unknown author"}
-                  </div>
-                </div>
-                <span style={{ color:"#d6d3d1", fontSize:16, flexShrink:0 }}>+</span>
-              </button>
-            ))
-          ) : (
-            <div style={{ padding:"14px 12px", fontSize:13, color:"#a8a29e", textAlign:"center" }}>
-              No results found
-            </div>
-          )}
-          <button
-            onClick={() => { setOpen(false); onManual(); }}
-            style={{
-              width:"100%", padding:"10px 12px", border:"none",
-              borderTop:"1px solid #f5f5f4", background:"#fafaf9",
-              color:"#78716c", fontSize:12, cursor:"pointer", textAlign:"left",
-            }}
-          >
-            ✏️ Add manually instead
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Share Overlay ───────────────────────────────────────────────────────────
 function ShareOverlay({ data, year, onClose }) {
@@ -1302,7 +162,7 @@ function ShareOverlay({ data, year, onClose }) {
 // ─── App Shell ────────────────────────────────────────────────────────────────
 export default function App() {
   const [data,     setData]     = useState(null);
-  const [popData,  setPopData]  = useState(null);
+  const [trendingData,  setTrendingData]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [view,     setView]     = useState("home");
   const [battleId, setBattleId] = useState(null);
@@ -1345,7 +205,7 @@ export default function App() {
       } catch {
         setData(freshData());
       }
-      setPopData(popStore.get(year) || freshPopData());
+      setTrendingData(trendingStore.get(year) || freshTrendingData());
       setLoading(false);
     })();
   }, []);
@@ -1353,13 +213,13 @@ export default function App() {
   useEffect(() => {
     if (!loading) {
       setData(store.get(year) || freshData());
-      setPopData(popStore.get(year) || freshPopData());
+      setTrendingData(trendingStore.get(year) || freshTrendingData());
       setBattleId(null);
     }
   }, [year]);
 
   const save = (nd) => { setData({ ...nd }); store.set(year, nd); };
-  const savePop = (nd) => { setPopData({ ...nd }); popStore.set(year, nd); };
+  const saveTrending = (nd) => { setTrendingData({ ...nd }); trendingStore.set(year, nd); };
 
   const NAV = [
     { v:"home",    icon:"🏠", lbl:"Home"    },
@@ -1415,10 +275,10 @@ export default function App() {
               <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Popular popData={popData || freshPopData()} savePop={savePop} year={year} setYear={setYear} />
+              <Popular trendingData={trendingData || freshTrendingData()} saveTrending={saveTrending} year={year} setYear={setYear} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <BracketHub data={data} popData={popData || freshPopData()} save={save} savePop={savePop} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} />
+              <BracketHub data={data} trendingData={trendingData || freshTrendingData()} save={save} saveTrending={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} />
             </div>
           </div>
         </div>
@@ -2145,7 +1005,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
       {/* Add book — search or manual form */}
       {!showManual ? (
-        <BookSearch onSelect={addBook} onManual={() => setShowManual(true)} />
+        <ItemSearch onSelect={addBook} onManual={() => setShowManual(true)} placeholder="Search for a book..." searchFn={searchBooks} />
       ) : (
         <div style={{ background:"#fff", border:"2px solid #4ade80", borderRadius:14, padding:14, display:"flex", flexDirection:"column", gap:8 }}>
           {[["title","Book title *"],["author","Author"],["cover","Cover image URL (optional)"]].map(([k, ph]) => (
@@ -2179,14 +1039,14 @@ function Month({ data, save, idx, setIdx, onBack }) {
 }
 
 // ─── Popular (Trending Grid) ────────────────────────────────────────────────
-function Popular({ popData, savePop, year, setYear }) {
+function Popular({ trendingData, saveTrending, year, setYear }) {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const thisYear = new Date().getFullYear();
-  const picks = popData.months.map(m => m.winner);
+  const picks = trendingData.months.map(m => m.winner);
   const count = picks.filter(Boolean).length;
 
   if (selectedMonth !== null) {
-    return <TrendingMonth popData={popData} savePop={savePop} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} />;
+    return <TrendingMonth trendingData={trendingData} saveTrending={saveTrending} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} />;
   }
 
   return (
@@ -2203,7 +1063,7 @@ function Popular({ popData, savePop, year, setYear }) {
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
-            const hasBooks = popData.months[i].books?.length > 0;
+            const hasBooks = trendingData.months[i].books?.length > 0;
             return (
               <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
                 <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
@@ -2227,7 +1087,7 @@ function Popular({ popData, savePop, year, setYear }) {
 }
 
 // ─── Trending Month Detail ──────────────────────────────────────────────────
-function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
+function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showBracket, setShowBracket] = useState(false);
@@ -2235,17 +1095,17 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
   const swipeX = useRef(null);
   const swipeY = useRef(null);
 
-  const m = popData.months[idx];
+  const m = trendingData.months[idx];
   const monthPicks = m.bracketPicks || {};
 
   useEffect(() => {
     if (m.books.length > 0) return;
     setLoading(true);
     setError("");
-    fetchPopularBooks(year, idx)
+    fetchTrendingBooks(year, idx)
       .then(books => {
-        const nd = { ...popData, months: popData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
-        savePop(nd);
+        const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
+        saveTrending(nd);
         setLoading(false);
       })
       .catch(() => { setError("Couldn't load trending books"); setLoading(false); });
@@ -2264,8 +1124,8 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
     swipeX.current = null;
   };
 
-  const popVote = (matchId, book) => {
-    const nd = { ...popData, months: popData.months.map((mo, i) => {
+  const trendingVote = (matchId, book) => {
+    const nd = { ...trendingData, months: trendingData.months.map((mo, i) => {
       if (i !== idx) return mo;
       const newPicks = { ...monthPicks, [matchId]: book };
       const bracket = buildBracket(mo.books);
@@ -2273,26 +1133,26 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
       const winner = (finalMatch && newPicks[finalMatch.id]) ? newPicks[finalMatch.id] : mo.winner;
       return { ...mo, bracketPicks: newPicks, winner };
     }) };
-    savePop(nd);
+    saveTrending(nd);
     setMonthBattle(null);
   };
 
-  const popClearVote = (matchId) => {
-    const nd = { ...popData, months: popData.months.map((mo, i) => {
+  const trendingClearVote = (matchId) => {
+    const nd = { ...trendingData, months: trendingData.months.map((mo, i) => {
       if (i !== idx) return mo;
       const newPicks = { ...(mo.bracketPicks || {}) };
       delete newPicks[matchId];
       return { ...mo, bracketPicks: newPicks, winner: null };
     }) };
-    savePop(nd);
+    saveTrending(nd);
   };
 
-  const resetPopBracket = () => {
+  const resetTrendingBracket = () => {
     if (!confirm("Reset this month's picks?")) return;
-    const nd = { ...popData, months: popData.months.map((mo, i) =>
+    const nd = { ...trendingData, months: trendingData.months.map((mo, i) =>
       i === idx ? { ...mo, bracketPicks: {}, winner: null } : mo
     ) };
-    savePop(nd);
+    saveTrending(nd);
   };
 
   // ── Battle screen ──
@@ -2329,7 +1189,7 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
               const won = winner?.id === book?.id;
               const lost = winner && !won;
               return (
-                <button key={book?.id} onClick={() => popVote(monthBattle, book)}
+                <button key={book?.id} onClick={() => trendingVote(monthBattle, book)}
                   style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
                   <Cover book={book} size={isTriple ? "md" : "lg"} />
                   <div style={{ textAlign:"center" }}>
@@ -2348,7 +1208,7 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
               <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>
                 {isFinal ? `"${winner.title}" is your pick!` : `"${winner.title}" advances!`}
               </div>
-              <button onClick={() => popClearVote(monthBattle)}
+              <button onClick={() => trendingClearVote(monthBattle)}
                 style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
               {isFinal && idx < 11 && (
                 <div style={{ marginTop:10 }}>
@@ -2381,7 +1241,7 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
         </div>
         {Object.keys(monthPicks).length > 0 && (
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <button onClick={resetPopBracket}
+            <button onClick={resetTrendingBracket}
               style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>Reset</button>
           </div>
         )}
@@ -2509,20 +1369,20 @@ function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
 }
 
 // ─── Bracket Hub ─────────────────────────────────────────────────────────────
-function BracketHub({ data, popData, save, savePop, battleId, setBattleId, year, openShare }) {
+function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattleId, year, openShare }) {
   const [mode, setMode] = useState(null);
 
   if (mode === "shelf") {
     return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
   }
   if (mode === "popular") {
-    return <Bracket data={popData} save={savePop} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="Popular Releases" />;
+    return <Bracket data={trendingData} save={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="Popular Releases" />;
   }
 
   const shelfPicks = data.months.filter(m => m.winner).length;
-  const popPicks = popData.months.filter(m => m.winner).length;
+  const trendingPicks = trendingData.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
-  const popChamp = popData.bracket?.["final"];
+  const trendingChamp = trendingData.bracket?.["final"];
 
   const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
 
@@ -2545,8 +1405,8 @@ function BracketHub({ data, popData, save, savePop, battleId, setBattleId, year,
         <span style={{ fontSize:28 }}>🔥</span>
         <div style={{ flex:1 }}>
           <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>Popular Releases</div>
-          <div style={{ fontSize:12, color: popChamp ? "#15803d" : "#78716c", marginTop:2 }}>
-            {popChamp ? `🏆 ${popChamp.title}` : `${popPicks}/12 monthly picks`}
+          <div style={{ fontSize:12, color: trendingChamp ? "#15803d" : "#78716c", marginTop:2 }}>
+            {trendingChamp ? `🏆 ${trendingChamp.title}` : `${trendingPicks}/12 monthly picks`}
           </div>
         </div>
         <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
