@@ -108,13 +108,7 @@ function extractGoodreadsUserId(input) {
 
 async function fetchGoodreadsRSS(userId) {
   const rssPath = `/review/list_rss/${userId}?shelf=read&per_page=200`;
-  try {
-    const res = await fetch(`/api/goodreads${rssPath}`);
-    if (res.ok) return await res.text();
-  } catch {}
-  const rssUrl = `https://www.goodreads.com${rssPath}`;
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`;
-  const res = await fetch(proxyUrl);
+  const res = await fetch(`/api/goodreads?path=${encodeURIComponent(rssPath)}`);
   if (!res.ok) throw new Error("Failed to fetch Goodreads data");
   return await res.text();
 }
