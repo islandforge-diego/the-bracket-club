@@ -1,3 +1,18 @@
+/**
+ * categoryConfig.js — per-category UI strings and preference definitions.
+ *
+ * ADDING A NEW CATEGORY (e.g. movies):
+ *   1. Copy BOOKS_CONFIG, change every field to suit the new category.
+ *   2. Export it as MOVIES_CONFIG (or similar).
+ *   3. Update getCategoryConfig() to read the current route or accept a param.
+ *   4. Create src/categories/movies/ with data.js (fetchers/parsers) and share.js (card generators).
+ *   5. Add a route in src/CategoryRouter.jsx.
+ *
+ * The trendingPreferences block is intentionally generic — field names like
+ * selectedCategories / selectedTags work for books, movies, games, etc.
+ * The actual option IDs and labels are the only thing that differs per category.
+ */
+
 export const BOOKS_CONFIG = {
   id: "books",
   singular: "book",
@@ -62,6 +77,11 @@ export const BOOKS_CONFIG = {
   },
 };
 
+/**
+ * Returns the config for the active category.
+ * Today this is always books. When multi-category routing lands, this will
+ * read the current path segment (e.g. /movies → MOVIES_CONFIG).
+ */
 export function getCategoryConfig() {
   return BOOKS_CONFIG;
 }

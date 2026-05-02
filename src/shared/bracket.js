@@ -1,3 +1,22 @@
+/**
+ * bracket.js — tournament bracket construction and winner resolution.
+ *
+ * Two bracket types exist in the app:
+ *
+ *   Monthly bracket (within a month's books/trending):
+ *     Built dynamically from the item list. Round 1 matches are seeded directly
+ *     with items (match.a, match.b, optional match.c for odd counts). Later rounds
+ *     reference earlier matches by ID via feedA/feedB/feedC. Winners are stored in
+ *     bracketPicks: { [matchId]: item }.
+ *
+ *   Year bracket (across 12 monthly winners):
+ *     Defined statically in constants.js (MATCHES, R1, R2). Each match references
+ *     months by index (match.m1, match.m2) rather than dynamic item refs.
+ *
+ * buildBracket handles odd item counts by giving the last R1 match a third slot (c),
+ * making it a 3-way vote rather than discarding the odd item.
+ */
+
 export function buildBracket(items) {
   if (items.length < 2) return { rounds: [], seeds: items };
 

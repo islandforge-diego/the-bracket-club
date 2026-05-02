@@ -1,3 +1,18 @@
+/**
+ * storage.js — localStorage persistence helpers.
+ *
+ * Data is stored per-year so users can keep multiple years side by side:
+ *   botb_2025, botb_2026       — personal shelf data (createStore("botb_"))
+ *   botb_pop_2025, botb_pop_2026 — trending bracket data (createStore("botb_pop_"))
+ *
+ * When a real backend is added, the app layer (App.jsx) calls save()/get()
+ * through these same functions — swapping to API calls only requires changing
+ * the implementation here, not the call sites.
+ *
+ * Data shape per year:
+ *   { months: Array<{ books, winner, bracketPicks? }>, bracket: {} }
+ */
+
 import { MONTHS } from './constants.js';
 
 export function createStore(prefix) {

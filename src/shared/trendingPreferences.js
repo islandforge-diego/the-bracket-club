@@ -1,3 +1,17 @@
+/**
+ * trendingPreferences.js — stores and retrieves per-category trending preferences.
+ *
+ * All preferences are keyed by categoryId ("books", "movies", etc.) so each
+ * category is fully independent. The preference fields are intentionally generic:
+ *   selectedCategories — genre/type picks (e.g. ["fantasy", "sci_fi"] for books)
+ *   selectedTags       — mood/style picks (e.g. ["page_turners", "cozy"])
+ *   excludedTags       — things to filter out (e.g. ["romance_heavy", "young_adult"])
+ *   discoveryMode      — "mainstream" | "balanced" | "taste_first"
+ *
+ * Stored in a single localStorage key as { [categoryId]: prefs } so the
+ * structure stays flat and easy to migrate to a backend later.
+ */
+
 const KEY = "bracket_club_trending_prefs";
 
 const DEFAULT_PREFS = {

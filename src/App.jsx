@@ -1,3 +1,22 @@
+/**
+ * App.jsx — Books category page.
+ *
+ * Rendered at /books by CategoryRouter. Owns all state for one year of data and
+ * hands slices down to the three main views via a tab-based layout:
+ *
+ *   📚 My Shelf  (Month component)   — personal reading log, monthly bracket voting
+ *   🔥 Trending  (Popular component) — Goodreads trending, personalized via prefs
+ *   🏆 Bracket   (BracketHub)        — year-end tournament across monthly winners
+ *
+ * State lives in localStorage via createStore() (storage.js). When a backend is
+ * added, only the load/save calls in the root useEffect need to change — all
+ * child components already receive data as props and call save() callbacks.
+ *
+ * The three-panel slide animation is driven by a CSS translateX on a wrapper div.
+ * All overlay components (sheets, modals) use createPortal(…, document.body) to
+ * escape the transform stacking context, which would otherwise break position:fixed.
+ */
+
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─── Shared modules ──────────────────────────────────────────────────────────
@@ -14,11 +33,12 @@ import { rankTrending } from "./shared/rankTrending.js";
 import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import TrendingOnboarding, { TrendingBanner, TrendingControlsSheet } from "./shared/TrendingOnboarding.jsx";
+import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 
 const CAT = getCategoryConfig();
 
 // ─── Book-specific modules ──────────────────────────────────────────────────
-import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, searchBooks } from "./categories/books/data.js";
+import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, fetchGenreTrending, enrichBooks, searchBooks } from "./categories/books/data.js";
 import { generateMonthlyCard, generateTop3Card, generateBOTYCard } from "./categories/books/share.js";
 
 // ─── Book storage instances ─────────────────────────────────────────────────
@@ -595,6 +615,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
   const [form,         setForm]         = useState({ title:"", author:"", cover:"" });
   const [monthBattle,  setMonthBattle]  = useState(null);
   const [showBracket,  setShowBracket]  = useState(false);
+  const [detailBook,   setDetailBook]   = useState(null);
   const swipeX = useRef(null);
   const swipeY = useRef(null);
   const m = data.months[idx];
@@ -714,7 +735,9 @@ function Month({ data, save, idx, setIdx, onBack }) {
       const isTriple = contenders.length === 3;
 
       return (
-        <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+        <>
+          {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
+          <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
           <button onClick={() => setMonthBattle(null)}
             style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
             ‹ Back to bracket
@@ -729,7 +752,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
               const lost = winner && !won;
               return (
                 <button key={book?.id} onClick={() => monthVote(monthBattle, book)}
-                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  style={{ flex:1, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
                   <Cover book={book} size={isTriple ? "md" : "lg"} />
                   <div style={{ textAlign:"center" }}>
                     <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
@@ -737,6 +760,8 @@ function Month({ data, save, idx, setIdx, onBack }) {
                     {book?.rating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                   </div>
                   {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
+                  <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
+                    style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
                 </button>
               );
             })}
@@ -760,6 +785,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
             </div>
           )}
         </div>
+        </>
       );
     }
   }
@@ -767,7 +793,9 @@ function Month({ data, save, idx, setIdx, onBack }) {
   // ── Monthly pick: special 3-book view ──
   if (showBracket && m.books.length >= 2 && m.books.length <= 3) {
     return (
-      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+      <>
+        {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
+        <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
           ‹ Back to {FULL[idx]}
@@ -787,7 +815,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
                 nd.months[idx] = { ...m, winner: won ? null : book };
                 save(nd);
               }}
-                style={{ flex:1, maxWidth:140, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.4:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                style={{ flex:1, maxWidth:140, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.4:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
                 <Cover book={book} size="lg" />
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontWeight:800, fontSize:12, color:"#1c1917", lineHeight:1.3 }}>{book.title}</div>
@@ -795,6 +823,8 @@ function Month({ data, save, idx, setIdx, onBack }) {
                   {book.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                 </div>
                 {won && <span style={{ fontSize:22 }}>⭐</span>}
+                <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
+                  style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
               </button>
             );
           })}
@@ -813,6 +843,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
           </div>
         )}
       </div>
+      </>
     );
   }
 
@@ -931,6 +962,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
       onTouchEnd={onTouchEnd}
       style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}
     >
+      {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
       {/* Back button */}
       {onBack && (
         <button onClick={onBack}
@@ -1032,6 +1064,12 @@ function Month({ data, save, idx, setIdx, onBack }) {
                 {isStarred ? "⭐" : "☆"}
               </button>
             )}
+            {/* Info */}
+            <button
+              onClick={() => setDetailBook(book)}
+              style={{ background:"none", border:"none", fontSize:15, color:"#9ca3af", cursor:"pointer", padding:4, flexShrink:0 }}
+              title="Book details"
+            >ⓘ</button>
             {/* Delete */}
             <button
               onClick={() => delBook(book.id)}
@@ -1201,6 +1239,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
   const [error, setError] = useState("");
   const [showBracket, setShowBracket] = useState(false);
   const [monthBattle, setMonthBattle] = useState(null);
+  const [detailBook, setDetailBook] = useState(null);
   const swipeX = useRef(null);
   const swipeY = useRef(null);
 
@@ -1209,10 +1248,31 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
   const rankedBooks = rankTrending(m.books, trendingPrefs);
 
   useEffect(() => {
+    const needsEnrich = m.books.length > 0 && m.books.some(b => b.categories === undefined);
+    if (needsEnrich) {
+      enrichBooks(m.books).then(books => {
+        const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
+        saveTrending(nd);
+      });
+      return;
+    }
     if (m.books.length > 0) return;
     setLoading(true);
     setError("");
-    fetchTrendingBooks(year, idx)
+    const selectedCats = trendingPrefs?.preferences?.selectedCategories || [];
+    Promise.all([
+      fetchTrendingBooks(year, idx),
+      ...selectedCats.slice(0, 3).map(cat => fetchGenreTrending(year, idx, cat)),
+    ])
+      .then(([base, ...genreArrays]) => {
+        const seen = new Set();
+        const merged = [...base, ...genreArrays.flat()].filter(b => {
+          if (seen.has(b.id)) return false;
+          seen.add(b.id);
+          return true;
+        });
+        return enrichBooks(merged);
+      })
       .then(books => {
         const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
         saveTrending(nd);
@@ -1285,7 +1345,9 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
       const isTriple = contenders.length === 3;
 
       return (
-        <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+        <>
+          {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
+          <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
           <button onClick={() => setMonthBattle(null)}
             style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
             ‹ Back to bracket
@@ -1300,7 +1362,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
               const lost = winner && !won;
               return (
                 <button key={book?.id} onClick={() => trendingVote(monthBattle, book)}
-                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  style={{ flex:1, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
                   <Cover book={book} size={isTriple ? "md" : "lg"} />
                   <div style={{ textAlign:"center" }}>
                     <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
@@ -1308,6 +1370,8 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
                     {book?.avgRating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3 }}>★ {book.avgRating.toFixed(1)}</div>}
                   </div>
                   {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
+                  <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
+                    style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
                 </button>
               );
             })}
@@ -1331,6 +1395,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
             </div>
           )}
         </div>
+        </>
       );
     }
   }
@@ -1429,6 +1494,8 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
 
   // ── Main view: book list (read-only, no add/delete) ──
   return (
+    <>
+    {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
       style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}>
 
@@ -1460,7 +1527,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
       )}
 
       {!loading && rankedBooks.map((book, bi) => (
-        <div key={book.id} style={{ display:"flex", alignItems:"center", gap:10, background:"#fff", borderRadius:14, padding:"10px 12px", border:`2px solid ${m.winner?.id === book.id ? "#22c55e" : "#e7e5e4"}` }}>
+        <div key={book.id} onClick={() => setDetailBook(book)} style={{ display:"flex", alignItems:"center", gap:10, background:"#fff", borderRadius:14, padding:"10px 12px", border:`2px solid ${m.winner?.id === book.id ? "#22c55e" : "#e7e5e4"}`, cursor:"pointer" }}>
           <div style={{ fontSize:14, fontWeight:800, color:"#14532d", width:22, textAlign:"center", flexShrink:0 }}>{bi + 1}</div>
           <Cover book={book} size="sm" />
           <div style={{ flex:1, minWidth:0 }}>
@@ -1475,6 +1542,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
         </div>
       ))}
     </div>
+    </>
   );
 }
 

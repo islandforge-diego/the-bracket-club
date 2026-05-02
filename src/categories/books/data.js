@@ -1,4 +1,24 @@
-// Book-specific data fetchers: Goodreads RSS, CSV, and Popular/Trending
+/**
+ * categories/books/data.js — all data fetching and parsing for the Books category.
+ *
+ * Three data sources:
+ *   1. Goodreads RSS / CSV  — user's personal reading history (parseGoodreadsRSS/CSV)
+ *   2. Goodreads popular_by_date — monthly trending books (fetchTrendingBooks)
+ *      └─ with optional ?category= filter per user preference (fetchGenreTrending)
+ *   3. Open Library search API — enriches books with genre subjects (enrichBooks)
+ *
+ * Enrichment pipeline (runs once per book, result cached in localStorage):
+ *   fetchTrendingBooks / fetchGenreTrending
+ *     → raw books { title, author, cover, popularity, description }
+ *   enrichBooks
+ *     → Open Library subjects → mapSubjectsToCategories → categories: string[]
+ *     → description keyword scan → inferTagsFromDescription → tags: string[]
+ *   rankTrending (shared/rankTrending.js)
+ *     → scored and sorted list based on user preferences
+ *
+ * All fetch calls to Goodreads go through /api/goodreads (Vercel serverless proxy)
+ * to avoid CORS. Open Library is called directly — it has permissive CORS headers.
+ */
 
 export function parseCSVLine(line) {
   const result = [];
@@ -82,6 +102,8 @@ export function parseGoodreadsRSSAll(xmlText) {
     const cover = item.querySelector("book_large_image_url")?.textContent?.trim() || item.querySelector("book_image_url")?.textContent?.trim() || "";
     const ratingStr = item.querySelector("user_rating")?.textContent?.trim();
     const rating = parseInt(ratingStr);
+    const rawDesc = item.querySelector("book_description")?.textContent?.trim() || "";
+    const description = rawDesc.replace(/<[^>]*>/g, "").trim();
 
     results.push({
       title,
@@ -90,6 +112,7 @@ export function parseGoodreadsRSSAll(xmlText) {
       year: d.getFullYear(),
       month: d.getMonth(),
       cover: cover && !cover.includes("nophoto") ? cover : "",
+      description,
     });
   });
   return results;
@@ -107,6 +130,24 @@ export async function fetchAllGoodreadsBooks(userId) {
   return allItems;
 }
 
+// Maps our category IDs to Goodreads popular_by_date category slugs
+const CATEGORY_TO_GR_SLUG = {
+  fantasy:            "fantasy",
+  sci_fi:             "science-fiction",
+  romance:            "romance",
+  mystery_thriller:   "mystery-thriller-suspense",
+  horror:             "horror",
+  literary_fiction:   "literary-fiction",
+  historical_fiction: "historical-fiction",
+  nonfiction:         "nonfiction",
+  memoir_biography:   "biography-memoir",
+  business:           "business",
+  self_improvement:   "self-help",
+  young_adult:        "young-adult",
+  classics:           "classics",
+  graphic_novels:     "graphic-novels",
+};
+
 export async function fetchTrendingBooks(year, month) {
   const path = `/book/popular_by_date/${year}/${month + 1}`;
   const res = await fetch(`/api/goodreads?path=${encodeURIComponent(path)}`);
@@ -115,7 +156,21 @@ export async function fetchTrendingBooks(year, month) {
   return parseTrendingBooksHTML(html);
 }
 
-export function parseTrendingBooksHTML(html) {
+export async function fetchGenreTrending(year, month, categoryId) {
+  const slug = CATEGORY_TO_GR_SLUG[categoryId];
+  if (!slug) return [];
+  try {
+    const path = `/book/popular_by_date/${year}/${month + 1}?category=${slug}`;
+    const res = await fetch(`/api/goodreads?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return [];
+    const html = await res.text();
+    return parseTrendingBooksHTML(html, 20);
+  } catch {
+    return [];
+  }
+}
+
+export function parseTrendingBooksHTML(html, limit = 12) {
   const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
   if (!match) return [];
   const data = JSON.parse(match[1]);
@@ -125,7 +180,7 @@ export function parseTrendingBooksHTML(html) {
   const topListKey = Object.keys(rootQ).find(k => k.startsWith("getTopList"));
   const topList = rootQ?.[topListKey];
   if (!topList?.edges) return [];
-  return topList.edges.slice(0, 12).map((edge, idx) => {
+  return topList.edges.slice(0, limit).map((edge, idx) => {
     const bookRef = edge.node?.__ref;
     const book = bookRef ? apollo[bookRef] : null;
     if (!book) return null;
@@ -133,6 +188,10 @@ export function parseTrendingBooksHTML(html) {
     const contrib = contribRef ? apollo[contribRef] : null;
     const workRef = book.work?.__ref;
     const work = workRef ? apollo[workRef] : null;
+    const rawDesc = book.description;
+    const descStr = typeof rawDesc === "object"
+      ? (rawDesc?.html || rawDesc?.text || "")
+      : (rawDesc || "");
     return {
       id: book.legacyId || Date.now() + idx,
       title: book.titleComplete || book.title || "",
@@ -142,8 +201,72 @@ export function parseTrendingBooksHTML(html) {
       avgRating: work?.stats?.averageRating || null,
       ratingsCount: work?.stats?.ratingsCount || 0,
       popularity: edge.count || 0,
+      description: descStr.replace(/<[^>]*>/g, "").trim(),
     };
   }).filter(Boolean);
+}
+
+// ─── Book enrichment ─────────────────────────────────────────────────────────
+
+const SUBJECT_CATEGORY_MAP = {
+  fantasy:            ["fantasy", "magic", "wizard", "dragon", "fae", "fairy tale", "fairy stories", "witches", "sorcery"],
+  sci_fi:             ["science fiction", "science-fiction", "sci-fi", "space", "dystopia", "dystopian", "cyberpunk", "time travel", "extraterrestrial", "apocalyptic"],
+  romance:            ["romance", "romantic", "love stories", "love story"],
+  mystery_thriller:   ["mystery", "thriller", "detective", "crime fiction", "suspense", "noir", "spy", "espionage"],
+  horror:             ["horror", "ghost stories", "ghost story", "vampire", "occult", "supernatural fiction"],
+  literary_fiction:   ["literary fiction", "psychological fiction", "general fiction"],
+  historical_fiction: ["historical fiction", "history -- fiction", "historical -- fiction"],
+  nonfiction:         ["nonfiction", "non-fiction", "narrative nonfiction", "journalism", "essays", "true crime", "popular science", "popular culture"],
+  memoir_biography:   ["biography", "autobiography", "memoir", "biographical", "personal narratives"],
+  business:           ["business", "economics", "finance", "entrepreneurship", "management", "leadership"],
+  self_improvement:   ["self-help", "personal development", "motivation", "productivity", "mindfulness", "psychology"],
+  young_adult:        ["young adult", "ya fiction", "teen fiction", "juvenile fiction", "children"],
+  classics:           ["classics", "classic literature", "19th century fiction", "18th century fiction", "victorian"],
+  graphic_novels:     ["comics", "graphic novel", "graphic novels", "manga", "illustrated"],
+};
+
+const TAG_KEYWORD_MAP = {
+  page_turners:      ["gripping", "page-turning", "page-turner", "fast-paced", "can't put down", "addictive", "unputdownable", "propulsive"],
+  emotional:         ["emotional", "heartbreaking", "moving", "touching", "tearjerker", "poignant", "devastating", "bittersweet"],
+  cozy:              ["cozy", "heartwarming", "feel-good", "charming", "gentle", "whimsical", "comforting"],
+  dark_intense:      ["dark", "intense", "disturbing", "gritty", "brutal", "graphic content", "harrowing"],
+  thought_provoking: ["thought-provoking", "philosophical", "profound", "insightful", "intellectual", "complex themes"],
+  fun_easy:          ["fun", "light-hearted", "hilarious", "funny", "humorous", "quick read", "breezy", "laugh"],
+  book_club:         ["book club", "discussion guide", "nuanced", "layered"],
+  award_winning:     ["pulitzer", "booker", "national book award", "award-winning", "award winning", "new york times bestseller", "oprah"],
+};
+
+function mapSubjectsToCategories(subjects) {
+  if (!subjects?.length) return [];
+  const lower = subjects.map(s => s.toLowerCase());
+  return Object.entries(SUBJECT_CATEGORY_MAP)
+    .filter(([, keywords]) => keywords.some(kw => lower.some(s => s.includes(kw))))
+    .map(([id]) => id);
+}
+
+function inferTagsFromDescription(description) {
+  if (!description) return [];
+  const lower = description.toLowerCase();
+  return Object.entries(TAG_KEYWORD_MAP)
+    .filter(([, keywords]) => keywords.some(kw => lower.includes(kw)))
+    .map(([id]) => id);
+}
+
+export async function enrichBooks(books) {
+  return Promise.all(books.map(async book => {
+    if (book.categories !== undefined) return book;
+    try {
+      const q = [book.title, book.author].filter(Boolean).join(" ");
+      const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=subject&limit=1`);
+      const data = await res.json();
+      const subjects = data.docs?.[0]?.subject || [];
+      const categories = mapSubjectsToCategories(subjects);
+      const tags = inferTagsFromDescription(book.description);
+      return { ...book, categories, tags };
+    } catch {
+      return { ...book, categories: [], tags: [] };
+    }
+  }));
 }
 
 export async function searchBooks(query) {
