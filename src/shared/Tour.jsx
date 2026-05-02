@@ -67,9 +67,9 @@ export default function Tour({ config, setView, onDone }) {
       }
       return false;
     };
-    // Try immediately, then retry after transition
+    // Try immediately (same-tab steps), then wait past the 300ms tab transition
     if (!measure()) {
-      const t1 = setTimeout(() => { if (!measure()) setTimeout(measure, 300); }, 100);
+      const t1 = setTimeout(() => { if (!measure()) setTimeout(measure, 200); }, 350);
       return () => { alive = false; clearTimeout(t1); };
     }
     return () => { alive = false; };
