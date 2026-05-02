@@ -197,6 +197,372 @@ async function shareProgress(data, year) {
   }
 }
 
+// ─── Share Image Generator ───────────────────────────────────────────────────
+function loadImage(src) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function drawCover(ctx, book, x, y, w, h) {
+  const color = COLORS[(book?.title?.charCodeAt(0) || 0) % COLORS.length];
+  const r = 8;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.clip();
+
+  let drawn = false;
+  if (book?._coverImg) {
+    try {
+      const img = book._coverImg;
+      const scale = Math.max(w / img.width, h / img.height);
+      const sw = img.width * scale, sh = img.height * scale;
+      ctx.drawImage(img, x + (w - sw) / 2, y + (h - sh) / 2, sw, sh);
+      drawn = true;
+    } catch {}
+  }
+  if (!drawn) {
+    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
+    grad.addColorStop(0, color + "bb");
+    grad.addColorStop(1, color);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${Math.max(10, w * 0.12)}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const title = book?.title?.slice(0, 18) || "?";
+    ctx.fillText(title, x + w / 2, y + h / 2, w - 8);
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.strokeStyle = "#00000022";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
+async function generateShareImage(data, year) {
+  const W = 1080, H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  const safeTop = 60, safeBot = 130;
+  const CX = W / 2 - 20;
+  const PAD = 32;
+
+  const months = data.months;
+  const b = data.bracket || {};
+  const champion = b["final"];
+  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
+  const starCount = months.filter(m => m.winner).length;
+
+  // Resolve top 3 (R2 winners)
+  const r1Winners = R1.map(match => getR1Winner(match, months, b));
+  const top3 = R2.map(match => {
+    if (b[match.id]) return b[match.id];
+    const w1 = r1Winners[R1.findIndex(r => r.id === match.p1)];
+    const w2 = r1Winners[R1.findIndex(r => r.id === match.p2)];
+    if (w1 && !w2) return w1;
+    if (w2 && !w1) return w2;
+    return null;
+  }).filter(Boolean);
+
+  // Preload cover images
+  const allBooks = [...months.map(m => m.winner).filter(Boolean), ...top3, champion].filter(Boolean);
+  const unique = [...new Map(allBooks.map(bk => [bk.id || bk.title, bk])).values()];
+  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
+
+  // ── Background ──
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#14532d");
+  bgGrad.addColorStop(0.35, "#166534");
+  bgGrad.addColorStop(1, "#0f3d1f");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = "#ffffff06";
+  for (let i = 0; i < W; i += 40) {
+    for (let j = 0; j < H; j += 40) {
+      if ((i + j) % 80 === 0) ctx.fillRect(i, j, 20, 20);
+    }
+  }
+
+  // ── Header ──
+  let y = safeTop + 10;
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 44px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.letterSpacing = "10px";
+  ctx.fillText("THE BRACKET CLUB", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 56;
+
+  ctx.fillStyle = "#ffffff88";
+  ctx.font = "600 26px system-ui, sans-serif";
+  ctx.fillText(`Battle of the Books ${year}`, CX, y);
+  y += 44;
+
+  ctx.strokeStyle = "#ffffff33";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD + 40, y);
+  ctx.lineTo(W - PAD - 40, y);
+  ctx.stroke();
+  y += 24;
+
+  // ── Vertical budget (content area: y to footerY) ──
+  const usableW = W - PAD * 2;
+  const footerStart = H - safeBot;
+  const contentH = footerStart - y;
+  // Monthly: ~40% | Top 3: ~30% | BOTY: ~30%
+  const monthlyH = Math.floor(contentH * 0.40);
+  const top3H = Math.floor(contentH * 0.30);
+  const botyH = Math.floor(contentH * 0.30);
+
+  // ── Section 1: Monthly Picks ──
+  ctx.fillStyle = "#ffffffaa";
+  ctx.font = "800 22px system-ui, sans-serif";
+  ctx.letterSpacing = "5px";
+  ctx.fillText("MONTHLY PICKS", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 34;
+
+  const ch = Math.floor((monthlyH - 30 - 34 - 14) / 2 - 20);
+  const cw = Math.floor(ch / 1.45);
+  const cg = Math.floor((usableW - 6 * cw) / 5);
+  const gridX = CX - (6 * cw + 5 * cg) / 2;
+
+  for (let i = 0; i < 12; i++) {
+    const col = i % 6, row = Math.floor(i / 6);
+    const x = gridX + col * (cw + cg);
+    const cy = y + row * (ch + 34);
+    const winner = months[i]?.winner;
+
+    ctx.fillStyle = "#00000066";
+    ctx.beginPath();
+    const lblW = cw + 8, lblH = 22;
+    ctx.roundRect(x + cw / 2 - lblW / 2, cy - 4, lblW, lblH, 4);
+    ctx.fill();
+    ctx.fillStyle = winner ? "#fff" : "#ffffffaa";
+    ctx.font = `800 ${Math.max(16, cw * 0.18)}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(MONTHS[i].toUpperCase(), x + cw / 2, cy);
+
+    if (winner) {
+      drawCover(ctx, winner, x, cy + 18, cw, ch);
+    } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x, cy + 18, cw, ch, 8);
+      ctx.fillStyle = "#ffffff11";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff22";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  y += 2 * (ch + 34) + 16;
+
+  // ── Section 2: Top 3 Books ──
+  ctx.strokeStyle = "#ffffff22";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD + 20, y);
+  ctx.lineTo(W - PAD - 20, y);
+  ctx.stroke();
+  y += 18;
+
+  ctx.fillStyle = "#ffffffaa";
+  ctx.font = "800 22px system-ui, sans-serif";
+  ctx.letterSpacing = "5px";
+  ctx.textAlign = "center";
+  ctx.fillText("TOP 3", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 32;
+
+  const t3H = Math.floor(top3H - 18 - 28 - 50);
+  const t3W = Math.floor(t3H / 1.45);
+  const t3Gap = Math.floor((usableW - 3 * t3W) / 2);
+  const t3TotalW = 3 * t3W + 2 * t3Gap;
+  const t3X = CX - t3TotalW / 2;
+
+  for (let i = 0; i < 3; i++) {
+    const book = top3[i];
+    const x = t3X + i * (t3W + t3Gap);
+
+    if (book) {
+      drawCover(ctx, book, x, y, t3W, t3H);
+      ctx.font = `800 ${Math.max(18, t3W * 0.12)}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      const titleLines = wrapText(ctx, book.title, t3W + 20);
+      const tlH = titleLines.length * 24 + 8;
+      ctx.fillStyle = "#00000055";
+      ctx.beginPath();
+      ctx.roundRect(x - 6, y + t3H + 8, t3W + 12, tlH, 6);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      titleLines.slice(0, 2).forEach((line, li) => {
+        ctx.fillText(line, x + t3W / 2, y + t3H + 24 + li * 24);
+      });
+    } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x, y, t3W, t3H, 10);
+      ctx.fillStyle = "#ffffff11";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff22";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff33";
+      ctx.font = "28px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("?", x + t3W / 2, y + t3H / 2 + 10);
+      ctx.restore();
+    }
+  }
+  y += t3H + 50;
+
+  // ── Section 3: Book of the Year ──
+  ctx.strokeStyle = "#ffffff22";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD + 20, y);
+  ctx.lineTo(W - PAD - 20, y);
+  ctx.stroke();
+  y += 18;
+
+  if (champion) {
+    const champH = Math.floor(botyH - 18 - 40);
+    const champW = Math.floor(champH / 1.45);
+    const boxW = Math.min(usableW, champW + 320);
+    const boxH = champH + 36;
+    const boxX = CX - boxW / 2;
+
+    ctx.fillStyle = "#fbbf2412";
+    ctx.beginPath();
+    ctx.roundRect(boxX, y, boxW, boxH, 18);
+    ctx.fill();
+    ctx.strokeStyle = "#fbbf2444";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const coverX = boxX + 24;
+    drawCover(ctx, champion, coverX, y + 18, champW, champH);
+
+    const textX = coverX + champW + 28;
+    const textMaxW = boxX + boxW - textX - 20;
+
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "800 20px system-ui, sans-serif";
+    ctx.letterSpacing = "4px";
+    ctx.textAlign = "left";
+    ctx.fillText("BOOK OF THE YEAR", textX, y + 36);
+    ctx.letterSpacing = "0px";
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 34px system-ui, sans-serif";
+    const champLines = wrapText(ctx, champion.title, textMaxW);
+    champLines.forEach((line, li) => {
+      ctx.fillText(line, textX, y + 74 + li * 40);
+    });
+
+    if (champion.author) {
+      ctx.fillStyle = "#ffffffbb";
+      ctx.font = "500 22px system-ui, sans-serif";
+      ctx.fillText(champion.author, textX, y + 74 + champLines.length * 40 + 14);
+    }
+
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "52px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("🏆", textX + textMaxW / 2, y + champH - 20);
+  } else {
+    ctx.fillStyle = "#ffffff15";
+    ctx.beginPath();
+    ctx.roundRect(CX - 120, y, 240, 100, 14);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff66";
+    ctx.font = "800 20px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("BOOK OF THE YEAR", CX, y + 38);
+    ctx.font = "40px system-ui, sans-serif";
+    ctx.fillText("👑", CX, y + 74);
+  }
+
+  // ── Stats Footer ──
+  const footerY = H - safeBot + 10;
+  ctx.strokeStyle = "#ffffff22";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD + 20, footerY);
+  ctx.lineTo(W - PAD - 20, footerY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffffffbb";
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 28);
+
+  ctx.fillStyle = "#ffffff66";
+  ctx.font = "500 18px system-ui, sans-serif";
+  ctx.fillText("thebracketclub.com", CX, footerY + 58);
+
+  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(" ");
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const test = current ? current + " " + word : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [text];
+}
+
+async function shareImage(data, year) {
+  const blob = await generateShareImage(data, year);
+  const file = new File([blob], `bracket-club-${year}.png`, { type: "image/png" });
+
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "The Bracket Club" });
+      return "shared";
+    } catch (e) {
+      if (e.name === "AbortError") return "cancelled";
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `bracket-club-${year}.png`;
+  a.click();
+  URL.revokeObjectURL(url);
+  return "downloaded";
+}
+
 // ─── Cover Component ──────────────────────────────────────────────────────────
 const COVER_SIZES = { xs:[28,40], sm:[40,56], md:[56,80], lg:[96,128], xl:[128,176] };
 
@@ -453,10 +819,16 @@ function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
   });
 
   const handleShare = async () => {
-    const result = await shareProgress(data, year);
-    if (result === "copied") {
-      setShareMsg("Copied to clipboard!");
+    setShareMsg("Creating...");
+    const result = await shareImage(data, year);
+    if (result === "downloaded") {
+      setShareMsg("Saved!");
       setTimeout(() => setShareMsg(""), 2500);
+    } else if (result === "shared") {
+      setShareMsg("Shared!");
+      setTimeout(() => setShareMsg(""), 2500);
+    } else {
+      setShareMsg("");
     }
   };
 
@@ -1070,12 +1442,18 @@ function Bracket({ data, save, battleId, setBattleId, year }) {
 
   return (
     <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
-      {/* Reset */}
+      {/* Top actions */}
       {Object.keys(b).length > 0 && (
-        <button onClick={resetBracket}
-          style={{ alignSelf:"flex-end", padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
-          Reset Bracket
-        </button>
+        <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
+          <button onClick={async () => { const r = await shareImage(data, year); }}
+            style={{ padding:"6px 12px", background:"#14532d", border:"none", borderRadius:8, fontSize:12, fontWeight:700, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+            📤 Share Bracket
+          </button>
+          <button onClick={resetBracket}
+            style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
+            Reset Bracket
+          </button>
+        </div>
       )}
 
       {/* Empty state */}
