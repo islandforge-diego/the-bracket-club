@@ -51,16 +51,22 @@ export async function ensureItem(book, categoryId) {
   if (!supabase) return null;
 
   const goodreadsId = book.goodreadsId || book.id || null;
+  // creators is always an array — handles co-authors, director+writers, studio+publisher
+  const creators = book.creators || (book.author ? [book.author] : []);
   const payload = {
     category_id:  categoryId,
     title:        book.title || "",
-    creator:      book.author || book.creator || "",
+    creators,
     cover_url:    book.cover  || book.cover_url || null,
     description:  book.description || null,
     genres:       book.categories || [],
     tags:         book.tags || [],
     metadata:     book.metadata || {},
     external_ids: goodreadsId ? { goodreads_id: String(goodreadsId) } : {},
+    // Track which source enriched this and when — replaces flat enriched_at
+    data_sources: book._enriched ? {
+      open_library: { fetched_at: new Date().toISOString(), fields: ["genres", "tags"] },
+    } : {},
   };
 
   // Try to find an existing item by goodreads_id first
@@ -116,12 +122,12 @@ export async function loadShelf(userId, categoryId, year) {
   const [shelfRes, champRes, picksRes] = await Promise.all([
     supabase
       .from("shelf_items")
-      .select("slot, user_rating, read_at, notes, items(id, title, creator, cover_url, description, genres, tags, external_ids)")
+      .select("slot, user_rating, read_at, notes, items(id, title, creators, cover_url, description, genres, tags, external_ids)")
       .eq("user_id", userId)
       .eq("season_id", seasonId),
     supabase
       .from("slot_champions")
-      .select("slot, items(id, title, creator, cover_url, description)")
+      .select("slot, items(id, title, creators, cover_url, description)")
       .eq("user_id", userId)
       .eq("season_id", seasonId),
     supabase
@@ -142,7 +148,8 @@ export async function loadShelf(userId, categoryId, year) {
     data.months[slot].books.push({
       id:          item.id,
       title:       item.title,
-      author:      item.creator,
+      author:      item.creators?.[0] || "",
+      creators:    item.creators || [],
       cover:       item.cover_url || "",
       description: item.description || "",
       categories:  item.genres || [],
@@ -161,10 +168,11 @@ export async function loadShelf(userId, categoryId, year) {
     const item = row.items;
     if (!item) continue;
     data.months[slot].winner = {
-      id:    item.id,
-      title: item.title,
-      author: item.creator,
-      cover: item.cover_url || "",
+      id:       item.id,
+      title:    item.title,
+      author:   item.creators?.[0] || "",
+      creators: item.creators || [],
+      cover:    item.cover_url || "",
     };
   }
 
