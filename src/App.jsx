@@ -104,6 +104,24 @@ function freshData() {
   };
 }
 
+const popStore = {
+  get: (year) => {
+    try { const v = localStorage.getItem("botb_pop_" + year); return v ? JSON.parse(v) : null; }
+    catch { return null; }
+  },
+  set: (year, val) => {
+    try { localStorage.setItem("botb_pop_" + year, JSON.stringify(val)); }
+    catch (e) { console.error("Save failed:", e); }
+  },
+};
+
+function freshPopData() {
+  return {
+    months: MONTHS.map(() => ({ books: [], winner: null, bracketPicks: {} })),
+    bracket: {},
+  };
+}
+
 // ─── Goodreads CSV Parser ─────────────────────────────────────────────────────
 function parseCSVLine(line) {
   const result = [];
@@ -185,7 +203,7 @@ function parseGoodreadsRSSAll(xmlText) {
 
     const title = item.querySelector("title")?.textContent?.trim() || "";
     const author = item.querySelector("author_name")?.textContent?.trim() || "";
-    const cover = item.querySelector("book_image_url")?.textContent?.trim() || "";
+    const cover = item.querySelector("book_large_image_url")?.textContent?.trim() || item.querySelector("book_image_url")?.textContent?.trim() || "";
     const ratingStr = item.querySelector("user_rating")?.textContent?.trim();
     const rating = parseInt(ratingStr);
 
@@ -211,6 +229,52 @@ async function fetchAllGoodreadsBooks(userId) {
     if (books.length < 200) break;
   }
   return allBooks;
+}
+
+// ─── Goodreads Popular Books ─────────────────────────────────────────────────
+async function fetchPopularBooks(year, month) {
+  const path = `/book/popular_by_date/${year}/${month + 1}`;
+  const res = await fetch(`/api/goodreads?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error("Failed to fetch popular books");
+  const html = await res.text();
+  return parsePopularBooksHTML(html);
+}
+
+function parsePopularBooksHTML(html) {
+  const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+  if (!match) return [];
+  const data = JSON.parse(match[1]);
+  const apollo = data.props?.pageProps?.apolloState;
+  if (!apollo) return [];
+  const rootQ = apollo.ROOT_QUERY;
+  const topListKey = Object.keys(rootQ).find(k => k.startsWith("getTopList"));
+  const topList = rootQ?.[topListKey];
+  if (!topList?.edges) return [];
+  return topList.edges.slice(0, 12).map((edge, idx) => {
+    const bookRef = edge.node?.__ref;
+    const book = bookRef ? apollo[bookRef] : null;
+    if (!book) return null;
+    const contribRef = book.primaryContributorEdge?.node?.__ref;
+    const contrib = contribRef ? apollo[contribRef] : null;
+    const workRef = book.work?.__ref;
+    const work = workRef ? apollo[workRef] : null;
+    return {
+      id: book.legacyId || Date.now() + idx,
+      title: book.titleComplete || book.title || "",
+      author: contrib?.name || "",
+      cover: book.imageUrl || "",
+      rating: work?.stats?.averageRating ? Math.round(work.stats.averageRating) : null,
+      avgRating: work?.stats?.averageRating || null,
+      ratingsCount: work?.stats?.ratingsCount || 0,
+      popularity: edge.count || 0,
+    };
+  }).filter(Boolean);
+}
+
+function fmtCount(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000) return Math.floor(n / 1000) + "K";
+  return String(n);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -624,6 +688,313 @@ async function shareImage(data, year) {
   return "downloaded";
 }
 
+// ─── Share Card Generators ──────────────────────────────────────────────────
+function drawCardBg(ctx, W, H) {
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#14532d");
+  bgGrad.addColorStop(0.35, "#166534");
+  bgGrad.addColorStop(1, "#0f3d1f");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff06";
+  for (let i = 0; i < W; i += 40) {
+    for (let j = 0; j < H; j += 40) {
+      if ((i + j) % 80 === 0) ctx.fillRect(i, j, 20, 20);
+    }
+  }
+}
+
+function drawCardHeader(ctx, W, year) {
+  const CX = W / 2;
+  let y = 60;
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 62px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.letterSpacing = "12px";
+  ctx.fillText("THE BRACKET CLUB", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 76;
+  ctx.fillStyle = "#ffffff88";
+  ctx.font = "600 36px system-ui, sans-serif";
+  ctx.fillText(`Battle of the Books ${year}`, CX, y);
+  y += 56;
+  ctx.strokeStyle = "#ffffff33";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(80, y);
+  ctx.lineTo(W - 80, y);
+  ctx.stroke();
+  return y + 20;
+}
+
+function drawCardFooter(ctx, W, H, bookCount, starCount) {
+  const CX = W / 2;
+  const footerY = H - 102;
+  ctx.strokeStyle = "#ffffff22";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(60, footerY);
+  ctx.lineTo(W - 60, footerY);
+  ctx.stroke();
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "700 30px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`${bookCount} books read  ·  ${starCount} months crowned`, CX, footerY + 34);
+  ctx.fillStyle = "#ffffffaa";
+  ctx.font = "700 26px system-ui, sans-serif";
+  ctx.fillText("thebracket.club", CX, footerY + 72);
+}
+
+async function generateMonthlyCard(data, year) {
+  const W = 1080, H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const CX = W / 2;
+  const months = data.months;
+  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
+  const starCount = months.filter(m => m.winner).length;
+
+  const winners = months.map(m => m.winner).filter(Boolean);
+  const unique = [...new Map(winners.map(b => [b.id || b.title, b])).values()];
+  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
+
+  drawCardBg(ctx, W, H);
+  let y = drawCardHeader(ctx, W, year);
+
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "800 36px system-ui, sans-serif";
+  ctx.letterSpacing = "6px";
+  ctx.textAlign = "center";
+  ctx.fillText("MONTHLY PICKS", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 54;
+
+  const cols = 4, rows = 3;
+  const footerStart = H - 110;
+  const availH = footerStart - y - 10;
+  const gapX = 20, gapY = 12;
+  const cellH = Math.floor((availH - (rows - 1) * gapY) / rows);
+  const labelH = 34;
+  const coverH = cellH - labelH - 6;
+  const coverW = Math.floor(coverH / 1.45);
+  const totalGridW = cols * coverW + (cols - 1) * gapX;
+  const gridX = CX - totalGridW / 2;
+
+  for (let i = 0; i < 12; i++) {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = gridX + col * (coverW + gapX);
+    const cy = y + row * (cellH + gapY);
+    const winner = months[i].winner;
+
+    ctx.fillStyle = "#00000066";
+    ctx.beginPath();
+    const lblW = coverW + 8;
+    ctx.roundRect(x + coverW / 2 - lblW / 2, cy, lblW, labelH - 2, 6);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = "800 22px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(MONTHS[i].toUpperCase(), x + coverW / 2, cy + 8);
+
+    if (winner) {
+      drawCover(ctx, winner, x, cy + labelH, coverW, coverH);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#ffffff11";
+      ctx.beginPath();
+      ctx.roundRect(x, cy + labelH, coverW, coverH, 8);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff22";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      ctx.fillStyle = "#ffffff33";
+      ctx.font = "500 24px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("TBD", x + coverW / 2, cy + labelH + coverH / 2 + 8);
+    }
+  }
+
+  drawCardFooter(ctx, W, H, bookCount, starCount);
+  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
+async function generateTop3Card(data, year) {
+  const W = 1080, H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const CX = W / 2;
+  const months = data.months;
+  const b = data.bracket || {};
+  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
+  const starCount = months.filter(m => m.winner).length;
+
+  const r1Winners = R1.map(match => getR1Winner(match, months, b));
+  const top3 = R2.map(match => {
+    if (b[match.id]) return b[match.id];
+    const w1 = r1Winners[R1.findIndex(r => r.id === match.p1)];
+    const w2 = r1Winners[R1.findIndex(r => r.id === match.p2)];
+    if (w1 && !w2) return w1;
+    if (w2 && !w1) return w2;
+    return null;
+  }).filter(Boolean);
+
+  const unique = [...new Map(top3.map(bk => [bk.id || bk.title, bk])).values()];
+  await Promise.all(unique.map(async (bk) => { bk._coverImg = await loadImage(bk.cover); }));
+
+  drawCardBg(ctx, W, H);
+  let y = drawCardHeader(ctx, W, year);
+
+  ctx.fillStyle = "#ffffffcc";
+  ctx.font = "800 40px system-ui, sans-serif";
+  ctx.letterSpacing = "6px";
+  ctx.textAlign = "center";
+  ctx.fillText("TOP 3", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 64;
+
+  if (top3.length > 0) {
+    const footerStart = H - 110;
+    const textBelow = 110;
+    const maxCoverH = Math.min(520, footerStart - y - textBelow - 20);
+    const maxCoverW = Math.floor(maxCoverH / 1.45);
+    const maxPerCard = Math.floor((W - 100 - (top3.length - 1) * 24) / top3.length);
+    const coverW = Math.min(maxCoverW, maxPerCard);
+    const coverH = Math.floor(coverW * 1.45);
+    const gap = Math.min(32, Math.floor((W - 100 - top3.length * coverW) / Math.max(top3.length - 1, 1)));
+    const totalW = top3.length * coverW + Math.max(0, top3.length - 1) * gap;
+    const startX = CX - totalW / 2;
+
+    const ranks = ["\u{1F947}", "\u{1F948}", "\u{1F949}"];
+    for (let i = 0; i < top3.length; i++) {
+      const book = top3[i];
+      const x = startX + i * (coverW + gap);
+
+      ctx.font = "48px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(ranks[i] || "", x + coverW / 2, y - 2);
+
+      drawCover(ctx, book, x, y + 14, coverW, coverH);
+
+      ctx.font = "bold 26px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const titleLines = wrapText(ctx, book.title, coverW + 30);
+      const displayLines = titleLines.slice(0, 2);
+      if (titleLines.length > 2) displayLines[1] = displayLines[1].replace(/\s+\S*$/, "…");
+
+      const tlH = displayLines.length * 32 + 14;
+      ctx.fillStyle = "#00000055";
+      ctx.beginPath();
+      ctx.roundRect(x - 8, y + coverH + 22, coverW + 16, tlH, 8);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      displayLines.forEach((line, li) => {
+        ctx.fillText(line, x + coverW / 2, y + coverH + 46 + li * 32);
+      });
+
+      if (book.author) {
+        ctx.fillStyle = "#ffffffaa";
+        ctx.font = "500 20px system-ui, sans-serif";
+        ctx.fillText(book.author, x + coverW / 2, y + coverH + 46 + displayLines.length * 32 + 6);
+      }
+    }
+  } else {
+    ctx.fillStyle = "#ffffff44";
+    ctx.font = "500 32px system-ui, sans-serif";
+    ctx.fillText("Keep battling to reveal your Top 3!", CX, y + 60);
+  }
+
+  drawCardFooter(ctx, W, H, bookCount, starCount);
+  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
+async function generateBOTYCard(data, year) {
+  const W = 1080, H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const CX = W / 2;
+  const months = data.months;
+  const b = data.bracket || {};
+  const champion = b["final"];
+  const bookCount = months.reduce((n, m) => n + m.books.length, 0);
+  const starCount = months.filter(m => m.winner).length;
+
+  if (champion) champion._coverImg = await loadImage(champion.cover);
+
+  drawCardBg(ctx, W, H);
+  let y = drawCardHeader(ctx, W, year);
+
+  ctx.font = "80px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("\u{1F3C6}", CX, y + 20);
+  y += 110;
+
+  ctx.fillStyle = "#fbbf24";
+  ctx.font = "800 44px system-ui, sans-serif";
+  ctx.letterSpacing = "8px";
+  ctx.fillText("BOOK OF THE YEAR", CX, y);
+  ctx.letterSpacing = "0px";
+  y += 64;
+
+  if (champion) {
+    const footerStart = H - 110;
+    const textBelow = 130;
+    const champH = Math.min(520, footerStart - y - textBelow);
+    const champW = Math.floor(champH / 1.45);
+    const coverX = CX - champW / 2;
+
+    ctx.save();
+    ctx.shadowColor = "#fbbf2444";
+    ctx.shadowBlur = 40;
+    drawCover(ctx, champion, coverX, y, champW, champH);
+    ctx.restore();
+
+    ctx.strokeStyle = "#fbbf24";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.roundRect(coverX - 2, y - 2, champW + 4, champH + 4, 10);
+    ctx.stroke();
+
+    y += champH + 28;
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 42px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const titleLines = wrapText(ctx, champion.title, W - 160);
+    titleLines.slice(0, 2).forEach((line, li) => {
+      ctx.fillText(line, CX, y + li * 50);
+    });
+    y += Math.min(titleLines.length, 2) * 50;
+
+    if (champion.author) {
+      ctx.fillStyle = "#ffffffbb";
+      ctx.font = "500 32px system-ui, sans-serif";
+      ctx.fillText(champion.author, CX, y + 10);
+    }
+  } else {
+    ctx.fillStyle = "#ffffff15";
+    ctx.beginPath();
+    ctx.roundRect(CX - 180, y, 360, 280, 20);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff44";
+    ctx.font = "500 30px system-ui, sans-serif";
+    ctx.fillText("Complete the bracket", CX, y + 110);
+    ctx.fillText("to crown your champion!", CX, y + 155);
+    ctx.font = "64px system-ui, sans-serif";
+    ctx.fillText("\u{1F451}", CX, y + 240);
+  }
+
+  drawCardFooter(ctx, W, H, bookCount, starCount);
+  return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
 // ─── Cover Component ──────────────────────────────────────────────────────────
 const COVER_SIZES = { xs:[28,40], sm:[40,56], md:[56,80], lg:[96,128], xl:[128,176] };
 
@@ -687,7 +1058,7 @@ function BookSearch({ onSelect, onManual }) {
       setResults((data.docs || []).map(d => ({
         title:  d.title || "",
         author: d.author_name?.[0] || "",
-        cover:  d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : "",
+        cover:  d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg` : "",
       })));
       setOpen(true);
     } catch {
@@ -791,14 +1162,152 @@ function BookSearch({ onSelect, onManual }) {
   );
 }
 
+// ─── Share Overlay ───────────────────────────────────────────────────────────
+function ShareOverlay({ data, year, onClose }) {
+  const [cards, setCards] = useState([null, null, null]);
+  const [cardIdx, setCardIdx] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const swipeRef = useRef(null);
+  const LABELS = ["Monthly Picks", "Top 3", "Book of the Year"];
+
+  useEffect(() => {
+    let urls = [];
+    let cancelled = false;
+    (async () => {
+      const blobs = await Promise.all([
+        generateMonthlyCard(data, year),
+        generateTop3Card(data, year),
+        generateBOTYCard(data, year),
+      ]);
+      if (cancelled) return;
+      urls = blobs.map(b => URL.createObjectURL(b));
+      setCards(urls);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; urls.forEach(u => URL.revokeObjectURL(u)); };
+  }, []);
+
+  const onTouchStart = (e) => {
+    swipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onTouchEnd = (e) => {
+    if (!swipeRef.current) return;
+    const dx = e.changedTouches[0].clientX - swipeRef.current.x;
+    const dy = e.changedTouches[0].clientY - swipeRef.current.y;
+    swipeRef.current = null;
+    if (Math.abs(dy) > Math.abs(dx) || Math.abs(dx) < 50) return;
+    if (dx < 0 && cardIdx < 2) setCardIdx(i => i + 1);
+    else if (dx > 0 && cardIdx > 0) setCardIdx(i => i - 1);
+  };
+
+  const doDownload = () => {
+    if (!cards[cardIdx]) return;
+    const names = ["monthly-picks", "top-3", "book-of-the-year"];
+    const a = document.createElement("a");
+    a.href = cards[cardIdx];
+    a.download = `bracket-club-${year}-${names[cardIdx]}.png`;
+    a.click();
+  };
+
+  const doShare = async () => {
+    if (!cards[cardIdx]) return;
+    const names = ["monthly-picks", "top-3", "book-of-the-year"];
+    try {
+      const res = await fetch(cards[cardIdx]);
+      const blob = await res.blob();
+      const file = new File([blob], `bracket-club-${year}-${names[cardIdx]}.png`, { type: "image/png" });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "The Bracket Club" });
+        return;
+      }
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+    doDownload();
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(0,0,0,0.88)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      fontFamily: "system-ui, -apple-system, sans-serif",
+    }}>
+      <button onClick={onClose} style={{
+        position: "absolute", top: 16, right: 16, zIndex: 110,
+        background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 99,
+        width: 38, height: 38, fontSize: 18, color: "#fff", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>✕</button>
+
+      <div style={{ color: "#fff", fontWeight: 800, fontSize: 15, marginBottom: 12, letterSpacing: 1, textTransform: "uppercase" }}>
+        {LABELS[cardIdx]}
+      </div>
+
+      {loading ? (
+        <div style={{ color: "#fff", fontSize: 14, opacity: 0.6, padding: "40px 0" }}>Generating cards...</div>
+      ) : (
+        <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+          style={{ width: "100%", maxWidth: 340, overflow: "hidden" }}>
+          <div style={{
+            display: "flex", width: "300%",
+            transform: `translateX(-${cardIdx * (100 / 3)}%)`,
+            transition: "transform 0.3s ease-out",
+          }}>
+            {cards.map((url, i) => (
+              <div key={i} style={{ width: "33.333%", padding: "0 6px", boxSizing: "border-box" }}>
+                {url ? (
+                  <img src={url} alt={LABELS[i]} style={{ width: "100%", borderRadius: 12, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }} />
+                ) : (
+                  <div style={{ width: "100%", aspectRatio: "1080/1350", background: "rgba(255,255,255,0.05)", borderRadius: 12 }} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        {[0, 1, 2].map(i => (
+          <button key={i} onClick={() => setCardIdx(i)} style={{
+            width: cardIdx === i ? 24 : 8, height: 8, borderRadius: 4,
+            background: cardIdx === i ? "#fff" : "rgba(255,255,255,0.25)",
+            border: "none", cursor: "pointer", transition: "all 0.2s", padding: 0,
+          }} />
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
+        <button onClick={doDownload} disabled={loading} style={{
+          background: loading ? "rgba(255,255,255,0.2)" : "#fff",
+          color: "#14532d", border: "none", borderRadius: 99,
+          padding: "12px 24px", fontWeight: 800, fontSize: 14,
+          cursor: loading ? "default" : "pointer",
+        }}>
+          Save
+        </button>
+        <button onClick={doShare} disabled={loading} style={{
+          background: loading ? "rgba(34,197,94,0.4)" : "#22c55e",
+          color: "#fff", border: "none", borderRadius: 99,
+          padding: "12px 24px", fontWeight: 800, fontSize: 14,
+          cursor: loading ? "default" : "pointer",
+        }}>
+          Share
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── App Shell ────────────────────────────────────────────────────────────────
 export default function App() {
   const [data,     setData]     = useState(null);
+  const [popData,  setPopData]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [view,     setView]     = useState("home");
-  const [monthIdx, setMonthIdx] = useState(new Date().getMonth());
   const [battleId, setBattleId] = useState(null);
   const [year,     setYear]     = useState(new Date().getFullYear());
+  const [showShare, setShowShare] = useState(false);
 
   useEffect(() => {
     migrateStorage();
@@ -836,6 +1345,7 @@ export default function App() {
       } catch {
         setData(freshData());
       }
+      setPopData(popStore.get(year) || freshPopData());
       setLoading(false);
     })();
   }, []);
@@ -843,19 +1353,21 @@ export default function App() {
   useEffect(() => {
     if (!loading) {
       setData(store.get(year) || freshData());
+      setPopData(popStore.get(year) || freshPopData());
       setBattleId(null);
     }
   }, [year]);
 
   const save = (nd) => { setData({ ...nd }); store.set(year, nd); };
+  const savePop = (nd) => { setPopData({ ...nd }); popStore.set(year, nd); };
 
   const NAV = [
     { v:"home",    icon:"🏠", lbl:"Home"    },
-    { v:"month",   icon:"📖", lbl:FULL[new Date().getMonth()] },
+    { v:"popular", icon:"🔥", lbl:"Trending" },
     { v:"bracket", icon:"🏆", lbl:"Bracket" },
   ];
 
-  const VIEWS = ["home", "month", "bracket"];
+  const VIEWS = ["home", "popular", "bracket"];
   const viewIdx = view === "import" ? 0 : VIEWS.indexOf(view);
   const swipeRef = useRef(null);
 
@@ -900,13 +1412,13 @@ export default function App() {
         <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd} style={{ flex:1, height:0, overflow:"hidden" }}>
           <div style={{ display:"flex", width:"300%", height:"100%", transform:`translateX(-${viewIdx*(100/3)}%)`, transition:"transform 0.3s ease-out" }}>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goMonth={i => { setMonthIdx(i); setView("month"); }} goBracket={() => setView("bracket")} goImport={() => setView("import")} />
+              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Month data={data} save={save} idx={monthIdx} setIdx={setMonthIdx} />
+              <Popular popData={popData || freshPopData()} savePop={savePop} year={year} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} />
+              <BracketHub data={data} popData={popData || freshPopData()} save={save} savePop={savePop} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} />
             </div>
           </div>
         </div>
@@ -918,7 +1430,7 @@ export default function App() {
           {NAV.map(({ v, icon, lbl }) => (
             <button
               key={v}
-              onClick={() => { if (v === "month") setMonthIdx(curM); setBattleId(null); setView(v); }}
+              onClick={() => { setBattleId(null); setView(v); }}
               style={{ flex:1, padding:"10px 0", display:"flex", flexDirection:"column", alignItems:"center", gap:2, fontSize:11, fontWeight:700, border:"none", background:view===v?"#f0fdf4":"#fff", color:view===v?"#166534":"#9ca3af", cursor:"pointer" }}
             >
               <span style={{ fontSize:20 }}>{icon}</span>{lbl}
@@ -926,37 +1438,27 @@ export default function App() {
           ))}
         </div>
       )}
+
+      {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
     </div>
   );
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
-function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
-  const [shareMsg, setShareMsg] = useState("");
+function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare }) {
+  const [selectedMonth, setSelectedMonth] = useState(null);
   const thisYear = new Date().getFullYear();
   const picks      = data.months.map(m => m.winner);
   const count      = picks.filter(Boolean).length;
-  const curPick    = picks[curM];
-  const curBooks   = data.months[curM].books || [];
   const readyMatch = MATCHES.find(m => {
     if (data.bracket[m.id]) return false;
     const { b1, b2 } = getBooks(m, data.months, data.bracket);
     return b1 && b2;
   });
 
-  const handleShare = async () => {
-    setShareMsg("Creating...");
-    const result = await shareImage(data, year);
-    if (result === "downloaded") {
-      setShareMsg("Saved!");
-      setTimeout(() => setShareMsg(""), 2500);
-    } else if (result === "shared") {
-      setShareMsg("Shared!");
-      setTimeout(() => setShareMsg(""), 2500);
-    } else {
-      setShareMsg("");
-    }
-  };
+  if (selectedMonth !== null) {
+    return <Month data={data} save={save} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} />;
+  }
 
   return (
     <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
@@ -974,10 +1476,9 @@ function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
-            const isCur = i === curM;
             const hasBooksButNoPick = !pick && (data.months[i].books?.length > 0);
             return (
-              <button key={m} onClick={() => goMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+              <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
                 <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
                 {pick ? (
                   <div style={{ position:"relative", flex:1, display:"flex" }}>
@@ -1009,20 +1510,16 @@ function Home({ data, curM, year, setYear, goMonth, goBracket, goImport }) {
         </button>
       )}
 
-      {/* ── Bottom row: Share Month + Import + Share ── */}
+      {/* ── Bottom row: Import + Share ── */}
       <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-        <button onClick={() => {}} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
-          <span style={{ fontSize:15 }}>🗓️</span>
-          <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Share Month</span>
-        </button>
         <button onClick={goImport} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
           <span style={{ fontSize:15 }}>📥</span>
           <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Import</span>
         </button>
         {count >= 1 && (
-          <button onClick={handleShare} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
+          <button onClick={openShare} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
             <span style={{ fontSize:15 }}>📤</span>
-            <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>{shareMsg || "Share"}</span>
+            <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Share</span>
           </button>
         )}
       </div>
@@ -1069,7 +1566,7 @@ function Import({ data, save, onDone, year }) {
         const json = await res.json();
         const cid  = json.docs?.[0]?.cover_i;
         if (cid) {
-          setBooks(prev => prev.map((b, j) => j === i ? { ...b, cover:`https://covers.openlibrary.org/b/id/${cid}-M.jpg` } : b));
+          setBooks(prev => prev.map((b, j) => j === i ? { ...b, cover:`https://covers.openlibrary.org/b/id/${cid}-L.jpg` } : b));
         }
       } catch {}
       await new Promise(r => setTimeout(r, 80));
@@ -1197,7 +1694,7 @@ function Import({ data, save, onDone, year }) {
 }
 
 // ─── Month ────────────────────────────────────────────────────────────────────
-function Month({ data, save, idx, setIdx }) {
+function Month({ data, save, idx, setIdx, onBack }) {
   const [showManual,   setShowManual]   = useState(false);
   const [form,         setForm]         = useState({ title:"", author:"", cover:"" });
   const [monthBattle,  setMonthBattle]  = useState(null);
@@ -1341,6 +1838,7 @@ function Month({ data, save, idx, setIdx }) {
                   <div style={{ textAlign:"center" }}>
                     <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
                     {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                    {book?.rating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                   </div>
                   {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
                 </button>
@@ -1350,9 +1848,19 @@ function Month({ data, save, idx, setIdx }) {
           </div>
           {winner && (
             <div style={{ textAlign:"center" }}>
-              <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>"{winner.title}" advances!</div>
+              <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>
+                {isFinal ? `"${winner.title}" is your pick!` : `"${winner.title}" advances!`}
+              </div>
               <button onClick={() => monthClearVote(monthBattle)}
                 style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
+              {isFinal && idx < 11 && (
+                <div style={{ marginTop:10 }}>
+                  <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
+                    style={{ background:"#14532d", color:"#fff", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                    Continue to {FULL[idx + 1]} →
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1388,6 +1896,7 @@ function Month({ data, save, idx, setIdx }) {
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontWeight:800, fontSize:12, color:"#1c1917", lineHeight:1.3 }}>{book.title}</div>
                   {book.author && <div style={{ fontSize:10, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                  {book.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                 </div>
                 {won && <span style={{ fontSize:22 }}>⭐</span>}
               </button>
@@ -1395,8 +1904,16 @@ function Month({ data, save, idx, setIdx }) {
           })}
         </div>
         {m.winner && (
-          <div style={{ textAlign:"center", fontSize:13, color:"#15803d", fontWeight:800 }}>
-            "{m.winner.title}" is your pick!
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>
+              "{m.winner.title}" is your pick!
+            </div>
+            {idx < 11 && (
+              <button onClick={() => { setShowBracket(false); setIdx(idx + 1); }}
+                style={{ marginTop:8, background:"#14532d", color:"#fff", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                Continue to {FULL[idx + 1]} →
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1500,6 +2017,12 @@ function Month({ data, save, idx, setIdx }) {
             <Cover book={m.winner} size="lg" />
             <div style={{ fontWeight:800, fontSize:16, marginTop:8 }}>{m.winner.title}</div>
             {m.winner.author && <div style={{ fontSize:12, opacity:.7, marginTop:2 }}>{m.winner.author}</div>}
+            {idx < 11 && (
+              <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
+                style={{ marginTop:12, background:"#fff", color:"#14532d", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                Continue to {FULL[idx + 1]} →
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1512,6 +2035,14 @@ function Month({ data, save, idx, setIdx }) {
       onTouchEnd={onTouchEnd}
       style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}
     >
+      {/* Back button */}
+      {onBack && (
+        <button onClick={onBack}
+          style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+          ‹ Back to Home
+        </button>
+      )}
+
       {/* Month navigation */}
       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
         <button
@@ -1647,8 +2178,332 @@ function Month({ data, save, idx, setIdx }) {
   );
 }
 
+// ─── Popular ─────────────────────────────────────────────────────────────────
+function Popular({ popData, savePop, year }) {
+  const [monthIdx, setMonthIdx] = useState(new Date().getMonth());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showBracket, setShowBracket] = useState(false);
+  const [monthBattle, setMonthBattle] = useState(null);
+  const swipeX = useRef(null);
+  const swipeY = useRef(null);
+
+  const m = popData.months[monthIdx];
+  const monthPicks = m.bracketPicks || {};
+
+  useEffect(() => {
+    if (m.books.length > 0) return;
+    setLoading(true);
+    setError("");
+    fetchPopularBooks(year, monthIdx)
+      .then(books => {
+        const nd = { ...popData, months: popData.months.map((mo, i) => i === monthIdx ? { ...mo, books } : mo) };
+        savePop(nd);
+        setLoading(false);
+      })
+      .catch(() => { setError("Couldn't load trending books"); setLoading(false); });
+  }, [monthIdx, year]);
+
+  const onTouchStart = (e) => { swipeX.current = e.touches[0].clientX; swipeY.current = e.touches[0].clientY; };
+  const onTouchEnd = (e) => {
+    if (swipeX.current === null) return;
+    const dx = swipeX.current - e.changedTouches[0].clientX;
+    const dy = swipeY.current - e.changedTouches[0].clientY;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      setShowBracket(false); setMonthBattle(null);
+      if (dx > 0) setMonthIdx(Math.min(11, monthIdx + 1));
+      else setMonthIdx(Math.max(0, monthIdx - 1));
+    }
+    swipeX.current = null;
+  };
+
+  const popVote = (matchId, book) => {
+    const nd = { ...popData, months: popData.months.map((mo, i) => {
+      if (i !== monthIdx) return mo;
+      const newPicks = { ...monthPicks, [matchId]: book };
+      const bracket = buildBracket(mo.books);
+      const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
+      const winner = (finalMatch && newPicks[finalMatch.id]) ? newPicks[finalMatch.id] : mo.winner;
+      return { ...mo, bracketPicks: newPicks, winner };
+    }) };
+    savePop(nd);
+    setMonthBattle(null);
+  };
+
+  const popClearVote = (matchId) => {
+    const nd = { ...popData, months: popData.months.map((mo, i) => {
+      if (i !== monthIdx) return mo;
+      const newPicks = { ...(mo.bracketPicks || {}) };
+      delete newPicks[matchId];
+      return { ...mo, bracketPicks: newPicks, winner: null };
+    }) };
+    savePop(nd);
+  };
+
+  const resetPopBracket = () => {
+    if (!confirm("Reset this month's picks?")) return;
+    const nd = { ...popData, months: popData.months.map((mo, i) =>
+      i === monthIdx ? { ...mo, bracketPicks: {}, winner: null } : mo
+    ) };
+    savePop(nd);
+  };
+
+  // ── Battle screen ──
+  if (monthBattle && m.books.length >= 2) {
+    const bracket = buildBracket(m.books);
+    const match = bracket.rounds.flat().find(mt => mt.id === monthBattle);
+    if (match) {
+      const contenders = [];
+      if (match.a !== undefined) {
+        contenders.push(match.a, match.b);
+        if (match.c) contenders.push(match.c);
+      } else {
+        if (match.feedA) { const w = getBracketWinner(match.feedA, bracket.rounds, monthPicks); if (w) contenders.push(w); }
+        if (match.feedB) { const w = getBracketWinner(match.feedB, bracket.rounds, monthPicks); if (w) contenders.push(w); }
+        if (match.feedC) { const w = getBracketWinner(match.feedC, bracket.rounds, monthPicks); if (w) contenders.push(w); }
+      }
+      const winner = monthPicks[monthBattle];
+      const roundNum = bracket.rounds.findIndex(r => r.some(mt => mt.id === monthBattle)) + 1;
+      const isFinal = roundNum === bracket.rounds.length;
+      const isTriple = contenders.length === 3;
+
+      return (
+        <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+          <button onClick={() => setMonthBattle(null)}
+            style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+            ‹ Back to bracket
+          </button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
+            <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
+          </div>
+          <div style={{ display:"flex", gap: isTriple ? 8 : 12, position:"relative" }}>
+            {contenders.filter(Boolean).map((book) => {
+              const won = winner?.id === book?.id;
+              const lost = winner && !won;
+              return (
+                <button key={book?.id} onClick={() => popVote(monthBattle, book)}
+                  style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  <Cover book={book} size={isTriple ? "md" : "lg"} />
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
+                    {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                    {book?.avgRating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3 }}>★ {book.avgRating.toFixed(1)}</div>}
+                  </div>
+                  {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
+                </button>
+              );
+            })}
+            {!isTriple && <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>}
+          </div>
+          {winner && (
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>
+                {isFinal ? `"${winner.title}" is your pick!` : `"${winner.title}" advances!`}
+              </div>
+              <button onClick={() => popClearVote(monthBattle)}
+                style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
+              {isFinal && monthIdx < 11 && (
+                <div style={{ marginTop:10 }}>
+                  <button onClick={() => { setShowBracket(false); setMonthBattle(null); setMonthIdx(monthIdx + 1); }}
+                    style={{ background:"#14532d", color:"#fff", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                    Continue to {FULL[monthIdx + 1]} →
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // ── Bracket overview ──
+  if (showBracket && m.books.length >= 2) {
+    const bracket = buildBracket(m.books);
+    const { rounds } = bracket;
+    return (
+      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+        <button onClick={() => setShowBracket(false)}
+          style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+          ‹ Back to {FULL[monthIdx]}
+        </button>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>{FULL[monthIdx]} Bracket</div>
+          <div style={{ fontSize:12, color:"#9ca3af", marginTop:2 }}>{m.books.length} books — pick your favourite</div>
+        </div>
+        {Object.keys(monthPicks).length > 0 && (
+          <div style={{ display:"flex", justifyContent:"flex-end" }}>
+            <button onClick={resetPopBracket}
+              style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>Reset</button>
+          </div>
+        )}
+        {rounds.map((round, ri) => {
+          const isFinal = ri === rounds.length - 1;
+          return (
+            <div key={ri} style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, textAlign:"center" }}>{isFinal ? "Final" : `Round ${ri + 1}`}</div>
+              <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(round.length, 3)}, 1fr)`, gap:8 }}>
+                {round.map(match => {
+                  const contenders = [];
+                  if (match.a !== undefined) {
+                    contenders.push(match.a, match.b);
+                    if (match.c) contenders.push(match.c);
+                  } else {
+                    if (match.feedA) { const w = getBracketWinner(match.feedA, rounds, monthPicks); if (w) contenders.push(w); }
+                    if (match.feedB) { const w = getBracketWinner(match.feedB, rounds, monthPicks); if (w) contenders.push(w); }
+                    if (match.feedC) { const w = getBracketWinner(match.feedC, rounds, monthPicks); if (w) contenders.push(w); }
+                  }
+                  const winner = monthPicks[match.id];
+                  const needed = match.a !== undefined ? (match.c ? 3 : 2) : (match.feedC ? 3 : 2);
+                  const ready = contenders.length === needed && !winner;
+                  const locked = !winner && !ready;
+                  const canClick = ready || !!winner;
+                  return (
+                    <button key={match.id} onClick={() => canClick ? setMonthBattle(match.id) : null}
+                      style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"10px 4px", background: winner ? "#f0fdf4" : "#fff", border: locked ? "2px dashed #e7e5e4" : `2px solid ${winner ? "#22c55e" : "#e7e5e4"}`, borderRadius:14, cursor: canClick ? "pointer" : "default", opacity: locked ? 0.4 : 1, transition:"all .2s" }}>
+                      {winner ? (
+                        <>
+                          <Cover book={winner} size="sm" />
+                          <div style={{ fontSize:9, fontWeight:700, color:"#15803d", lineHeight:1.2, textAlign:"center", maxWidth:80 }}>{winner.title}</div>
+                          <div style={{ fontSize:7, color:"#22c55e", fontWeight:800, textTransform:"uppercase", letterSpacing:1 }}>Winner</div>
+                        </>
+                      ) : ready ? (
+                        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                          <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                            {contenders.map((book, ci) => (
+                              <div key={book.id} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                                {ci > 0 && <span style={{ fontSize:9, fontWeight:800, color:"#78716c" }}>vs</span>}
+                                <Cover book={book} size="xs" />
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize:8, fontWeight:700, color:"#78716c", display:"flex", alignItems:"center", gap:3 }}>
+                            <span style={{ fontSize:10 }}>⚔️</span> Battle Ready
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:11, color:"#d6d3d1", padding:"8px 0" }}>🔒</div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {m.winner && (
+          <div style={{ background:"linear-gradient(135deg,#166534,#14532d)", borderRadius:20, padding:18, textAlign:"center", color:"#fff" }}>
+            <div style={{ fontSize:10, opacity:.65, textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>Winner</div>
+            <Cover book={m.winner} size="lg" />
+            <div style={{ fontWeight:800, fontSize:16, marginTop:8 }}>{m.winner.title}</div>
+            {m.winner.author && <div style={{ fontSize:12, opacity:.7, marginTop:2 }}>{m.winner.author}</div>}
+            {monthIdx < 11 && (
+              <button onClick={() => { setShowBracket(false); setMonthBattle(null); setMonthIdx(monthIdx + 1); }}
+                style={{ marginTop:12, background:"#fff", color:"#14532d", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                Continue to {FULL[monthIdx + 1]} →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Main view: book list ──
+  return (
+    <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+      style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <button onClick={() => { setShowBracket(false); setMonthIdx(Math.max(0, monthIdx - 1)); }} disabled={monthIdx === 0}
+          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:monthIdx===0?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:monthIdx===0?"#d6d3d1":"#14532d" }}>‹</button>
+        <div style={{ flex:1, textAlign:"center" }}>
+          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917" }}>{FULL[monthIdx]}</div>
+          <div style={{ fontSize:10, color:"#9ca3af" }}>Trending on Goodreads</div>
+        </div>
+        <button onClick={() => { setShowBracket(false); setMonthIdx(Math.min(11, monthIdx + 1)); }} disabled={monthIdx === 11}
+          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:monthIdx===11?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:monthIdx===11?"#d6d3d1":"#14532d" }}>›</button>
+      </div>
+
+      {loading && <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>Loading trending books...</div>}
+      {error && <div style={{ textAlign:"center", color:"#dc2626", fontSize:13, padding:"20px 0" }}>{error}</div>}
+
+      {!loading && m.books.length >= 2 && (
+        <button onClick={() => { setShowBracket(true); setMonthBattle(null); }}
+          style={{ background: m.winner ? "linear-gradient(135deg,#166534,#14532d)" : "#14532d", color:"#fff", border:"none", borderRadius:14, padding:"14px 16px", fontWeight:800, fontSize:14, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, boxShadow:"0 2px 8px #14532d44" }}>
+          {m.winner ? `⭐ ${m.winner.title}` : "⚔️ Pick your favourite"}
+          <span style={{ fontSize:11, opacity:.7 }}>→</span>
+        </button>
+      )}
+
+      {!loading && m.books.map((book, bi) => (
+        <div key={book.id} style={{ display:"flex", alignItems:"center", gap:10, background:"#fff", borderRadius:14, padding:"10px 12px", border:`2px solid ${m.winner?.id === book.id ? "#22c55e" : "#e7e5e4"}` }}>
+          <div style={{ fontSize:14, fontWeight:800, color:"#14532d", width:22, textAlign:"center", flexShrink:0 }}>{bi + 1}</div>
+          <Cover book={book} size="sm" />
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontWeight:700, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:13 }}>{book.title}</div>
+            {book.author && <div style={{ fontSize:11, color:"#78716c", marginTop:1 }}>{book.author}</div>}
+            <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:3 }}>
+              {book.avgRating && <span style={{ fontSize:11, color:"#f59e0b", fontWeight:700 }}>★ {book.avgRating.toFixed(1)}</span>}
+              {book.popularity > 0 && <span style={{ fontSize:10, color:"#9ca3af" }}>{fmtCount(book.popularity)} added</span>}
+            </div>
+          </div>
+          {m.winner?.id === book.id && <span style={{ fontSize:14 }}>🏆</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Bracket Hub ─────────────────────────────────────────────────────────────
+function BracketHub({ data, popData, save, savePop, battleId, setBattleId, year, openShare }) {
+  const [mode, setMode] = useState(null);
+
+  if (mode === "shelf") {
+    return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
+  }
+  if (mode === "popular") {
+    return <Bracket data={popData} save={savePop} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="Popular Releases" />;
+  }
+
+  const shelfPicks = data.months.filter(m => m.winner).length;
+  const popPicks = popData.months.filter(m => m.winner).length;
+  const shelfChamp = data.bracket?.["final"];
+  const popChamp = popData.bracket?.["final"];
+
+  const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
+
+  return (
+    <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", textAlign:"center" }}>Brackets</div>
+
+      <button onClick={() => setMode("shelf")} style={cardStyle}>
+        <span style={{ fontSize:28 }}>📚</span>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
+          <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
+            {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
+          </div>
+        </div>
+        <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+      </button>
+
+      <button onClick={() => setMode("popular")} style={cardStyle}>
+        <span style={{ fontSize:28 }}>🔥</span>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>Popular Releases</div>
+          <div style={{ fontSize:12, color: popChamp ? "#15803d" : "#78716c", marginTop:2 }}>
+            {popChamp ? `🏆 ${popChamp.title}` : `${popPicks}/12 monthly picks`}
+          </div>
+        </div>
+        <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+      </button>
+    </div>
+  );
+}
+
 // ─── Bracket ──────────────────────────────────────────────────────────────────
-function Bracket({ data, save, battleId, setBattleId, year }) {
+function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, label }) {
   const months = data.months;
   const b      = data.bracket || {};
   const [top3Pick, setTop3Pick] = useState(false);
@@ -1695,7 +2550,7 @@ function Bracket({ data, save, battleId, setBattleId, year }) {
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setBattleId(null)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
-          ‹ Back to bracket
+          ‹ Back to {label || "bracket"}
         </button>
         <div style={{ textAlign:"center" }}>
           <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{roundLabel}</div>
@@ -1714,6 +2569,7 @@ function Bracket({ data, save, battleId, setBattleId, year }) {
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontWeight:800, fontSize:13, color:"#1c1917" }}>{book?.title}</div>
                   {book?.author && <div style={{ fontSize:11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                  {book?.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                 </div>
                 {won && <span style={{ fontSize:22 }}>🏆</span>}
               </button>
@@ -1760,6 +2616,7 @@ function Bracket({ data, save, battleId, setBattleId, year }) {
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontWeight:800, fontSize:12, color:"#1c1917", lineHeight:1.3 }}>{book.title}</div>
                   {book.author && <div style={{ fontSize:10, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                  {book.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
                 </div>
                 {won && <span style={{ fontSize:22 }}>🏆</span>}
               </button>
@@ -1793,12 +2650,23 @@ function Bracket({ data, save, battleId, setBattleId, year }) {
 
   return (
     <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
+      {/* Back + label */}
+      {onBack && (
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <button onClick={onBack}
+            style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+            ‹ Back
+          </button>
+          {label && <span style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{label}</span>}
+        </div>
+      )}
+
       {/* Top actions */}
       {Object.keys(b).length > 0 && (
         <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
-          <button onClick={async () => { const r = await shareImage(data, year); }}
+          <button onClick={openShare}
             style={{ padding:"6px 12px", background:"#14532d", border:"none", borderRadius:8, fontSize:12, fontWeight:700, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
-            📤 Share Bracket
+            📤 Share
           </button>
           <button onClick={resetBracket}
             style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
