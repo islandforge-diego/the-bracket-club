@@ -1415,7 +1415,7 @@ export default function App() {
               <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Popular popData={popData || freshPopData()} savePop={savePop} year={year} />
+              <Popular popData={popData || freshPopData()} savePop={savePop} year={year} setYear={setYear} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
               <BracketHub data={data} popData={popData || freshPopData()} save={save} savePop={savePop} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} />
@@ -1468,7 +1468,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare 
         <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
           <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
           <div style={{ textAlign:"center" }}>
-            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Reads</div>
+            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Your Reads</div>
             <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
           </div>
           <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
@@ -2178,9 +2178,56 @@ function Month({ data, save, idx, setIdx, onBack }) {
   );
 }
 
-// ─── Popular ─────────────────────────────────────────────────────────────────
-function Popular({ popData, savePop, year }) {
-  const [monthIdx, setMonthIdx] = useState(new Date().getMonth());
+// ─── Popular (Trending Grid) ────────────────────────────────────────────────
+function Popular({ popData, savePop, year, setYear }) {
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const thisYear = new Date().getFullYear();
+  const picks = popData.months.map(m => m.winner);
+  const count = picks.filter(Boolean).length;
+
+  if (selectedMonth !== null) {
+    return <TrendingMonth popData={popData} savePop={savePop} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} />;
+  }
+
+  return (
+    <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
+      <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
+          <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Top Trending</div>
+            <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
+          </div>
+          <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
+          {MONTHS.map((m, i) => {
+            const pick = picks[i];
+            const hasBooks = popData.months[i].books?.length > 0;
+            return (
+              <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+                <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
+                {pick ? (
+                  <div style={{ position:"relative", flex:1, display:"flex" }}>
+                    <Cover book={pick} size="md" />
+                    <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
+                  </div>
+                ) : (
+                  <div style={{ flex:1, width:56, borderRadius:6, background: hasBooks?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooks?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
+                    {hasBooks ? <span style={{ fontSize:12 }}>🔥</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Trending Month Detail ──────────────────────────────────────────────────
+function TrendingMonth({ popData, savePop, year, idx, setIdx, onBack }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showBracket, setShowBracket] = useState(false);
@@ -2188,21 +2235,21 @@ function Popular({ popData, savePop, year }) {
   const swipeX = useRef(null);
   const swipeY = useRef(null);
 
-  const m = popData.months[monthIdx];
+  const m = popData.months[idx];
   const monthPicks = m.bracketPicks || {};
 
   useEffect(() => {
     if (m.books.length > 0) return;
     setLoading(true);
     setError("");
-    fetchPopularBooks(year, monthIdx)
+    fetchPopularBooks(year, idx)
       .then(books => {
-        const nd = { ...popData, months: popData.months.map((mo, i) => i === monthIdx ? { ...mo, books } : mo) };
+        const nd = { ...popData, months: popData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
         savePop(nd);
         setLoading(false);
       })
       .catch(() => { setError("Couldn't load trending books"); setLoading(false); });
-  }, [monthIdx, year]);
+  }, [idx, year]);
 
   const onTouchStart = (e) => { swipeX.current = e.touches[0].clientX; swipeY.current = e.touches[0].clientY; };
   const onTouchEnd = (e) => {
@@ -2211,15 +2258,15 @@ function Popular({ popData, savePop, year }) {
     const dy = swipeY.current - e.changedTouches[0].clientY;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       setShowBracket(false); setMonthBattle(null);
-      if (dx > 0) setMonthIdx(Math.min(11, monthIdx + 1));
-      else setMonthIdx(Math.max(0, monthIdx - 1));
+      if (dx > 0) setIdx(Math.min(11, idx + 1));
+      else setIdx(Math.max(0, idx - 1));
     }
     swipeX.current = null;
   };
 
   const popVote = (matchId, book) => {
     const nd = { ...popData, months: popData.months.map((mo, i) => {
-      if (i !== monthIdx) return mo;
+      if (i !== idx) return mo;
       const newPicks = { ...monthPicks, [matchId]: book };
       const bracket = buildBracket(mo.books);
       const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
@@ -2232,7 +2279,7 @@ function Popular({ popData, savePop, year }) {
 
   const popClearVote = (matchId) => {
     const nd = { ...popData, months: popData.months.map((mo, i) => {
-      if (i !== monthIdx) return mo;
+      if (i !== idx) return mo;
       const newPicks = { ...(mo.bracketPicks || {}) };
       delete newPicks[matchId];
       return { ...mo, bracketPicks: newPicks, winner: null };
@@ -2243,7 +2290,7 @@ function Popular({ popData, savePop, year }) {
   const resetPopBracket = () => {
     if (!confirm("Reset this month's picks?")) return;
     const nd = { ...popData, months: popData.months.map((mo, i) =>
-      i === monthIdx ? { ...mo, bracketPicks: {}, winner: null } : mo
+      i === idx ? { ...mo, bracketPicks: {}, winner: null } : mo
     ) };
     savePop(nd);
   };
@@ -2303,11 +2350,11 @@ function Popular({ popData, savePop, year }) {
               </div>
               <button onClick={() => popClearVote(monthBattle)}
                 style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
-              {isFinal && monthIdx < 11 && (
+              {isFinal && idx < 11 && (
                 <div style={{ marginTop:10 }}>
-                  <button onClick={() => { setShowBracket(false); setMonthBattle(null); setMonthIdx(monthIdx + 1); }}
+                  <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
                     style={{ background:"#14532d", color:"#fff", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
-                    Continue to {FULL[monthIdx + 1]} →
+                    Continue to {FULL[idx + 1]} →
                   </button>
                 </div>
               )}
@@ -2326,10 +2373,10 @@ function Popular({ popData, savePop, year }) {
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
-          ‹ Back to {FULL[monthIdx]}
+          ‹ Back to {FULL[idx]}
         </button>
         <div style={{ textAlign:"center" }}>
-          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>{FULL[monthIdx]} Bracket</div>
+          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>{FULL[idx]} Bracket</div>
           <div style={{ fontSize:12, color:"#9ca3af", marginTop:2 }}>{m.books.length} books — pick your favourite</div>
         </div>
         {Object.keys(monthPicks).length > 0 && (
@@ -2398,10 +2445,10 @@ function Popular({ popData, savePop, year }) {
             <Cover book={m.winner} size="lg" />
             <div style={{ fontWeight:800, fontSize:16, marginTop:8 }}>{m.winner.title}</div>
             {m.winner.author && <div style={{ fontSize:12, opacity:.7, marginTop:2 }}>{m.winner.author}</div>}
-            {monthIdx < 11 && (
-              <button onClick={() => { setShowBracket(false); setMonthBattle(null); setMonthIdx(monthIdx + 1); }}
+            {idx < 11 && (
+              <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
                 style={{ marginTop:12, background:"#fff", color:"#14532d", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
-                Continue to {FULL[monthIdx + 1]} →
+                Continue to {FULL[idx + 1]} →
               </button>
             )}
           </div>
@@ -2410,19 +2457,25 @@ function Popular({ popData, savePop, year }) {
     );
   }
 
-  // ── Main view: book list ──
+  // ── Main view: book list (read-only, no add/delete) ──
   return (
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
       style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}>
+
+      <button onClick={onBack}
+        style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
+        ‹ Back to Trending
+      </button>
+
       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-        <button onClick={() => { setShowBracket(false); setMonthIdx(Math.max(0, monthIdx - 1)); }} disabled={monthIdx === 0}
-          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:monthIdx===0?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:monthIdx===0?"#d6d3d1":"#14532d" }}>‹</button>
+        <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(Math.max(0, idx - 1)); }} disabled={idx === 0}
+          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:idx===0?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:idx===0?"#d6d3d1":"#14532d" }}>‹</button>
         <div style={{ flex:1, textAlign:"center" }}>
-          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917" }}>{FULL[monthIdx]}</div>
+          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917" }}>{FULL[idx]}</div>
           <div style={{ fontSize:10, color:"#9ca3af" }}>Trending on Goodreads</div>
         </div>
-        <button onClick={() => { setShowBracket(false); setMonthIdx(Math.min(11, monthIdx + 1)); }} disabled={monthIdx === 11}
-          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:monthIdx===11?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:monthIdx===11?"#d6d3d1":"#14532d" }}>›</button>
+        <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(Math.min(11, idx + 1)); }} disabled={idx === 11}
+          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:idx===11?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:idx===11?"#d6d3d1":"#14532d" }}>›</button>
       </div>
 
       {loading && <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>Loading trending books...</div>}
