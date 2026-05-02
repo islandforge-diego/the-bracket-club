@@ -305,6 +305,79 @@ export async function saveSeasonChampion(userId, categoryId, year, book) {
   }, { onConflict: "user_id,season_id" });
 }
 
+// ─── Full-shelf sync (called by App.jsx after every state change) ────────────
+//
+// App.jsx mutates the entire data blob then calls save(nd). Rather than diffing,
+// we just push the whole shelf for that year. For a typical user (12 months,
+// ~24 books, a bracket) this is ~50 row writes — fine to fire-and-forget.
+//
+// Debounce upstream so we don't hammer Supabase during rapid edits.
+
+export async function syncShelfData(userId, categoryId, year, data) {
+  if (!supabase || !userId) return;
+
+  const seasonId = await getSeasonId(categoryId, year);
+  if (!seasonId) return;
+
+  // 1. Resolve every book in the blob to an item UUID once, parallelized
+  const allBooks = data.months.flatMap(m => [
+    ...(m.books || []),
+    ...(m.winner ? [m.winner] : []),
+  ]);
+  const idMap = new Map(); // book.id (local) → item.id (uuid)
+  await Promise.all(allBooks.map(async b => {
+    if (!b || idMap.has(b.id)) return;
+    const uuid = await ensureItem(b, categoryId);
+    if (uuid) idMap.set(b.id, uuid);
+  }));
+
+  // 2. Wipe the old season state then re-insert from the current blob.
+  //    Done in parallel — no FKs between these tables block deletion.
+  await Promise.all([
+    supabase.from("shelf_items").delete().eq("user_id", userId).eq("season_id", seasonId),
+    supabase.from("slot_champions").delete().eq("user_id", userId).eq("season_id", seasonId),
+    supabase.from("bracket_picks").delete().eq("user_id", userId).eq("season_id", seasonId).eq("bracket_type", "annual"),
+  ]);
+
+  const shelfRows = [];
+  const champRows = [];
+  data.months.forEach((m, slot) => {
+    (m.books || []).forEach(b => {
+      const itemId = idMap.get(b.id);
+      if (!itemId) return;
+      shelfRows.push({
+        user_id: userId, item_id: itemId, season_id: seasonId, slot,
+        user_rating: b.rating || null,
+        read_at:     b.readAt || null,
+        notes:       b.notes  || null,
+      });
+    });
+    if (m.winner) {
+      const itemId = idMap.get(m.winner.id);
+      if (itemId) champRows.push({ user_id: userId, season_id: seasonId, slot, item_id: itemId });
+    }
+  });
+
+  const pickRows = Object.entries(data.bracket || {}).map(([matchId, winnerLocalId]) => {
+    const itemId = idMap.get(winnerLocalId);
+    if (!itemId) return null;
+    return {
+      user_id:      userId,
+      season_id:    seasonId,
+      bracket_type: "annual",
+      slot:         null,
+      match_id:     matchId,
+      winner_id:    itemId,
+    };
+  }).filter(Boolean);
+
+  await Promise.all([
+    shelfRows.length && supabase.from("shelf_items").insert(shelfRows),
+    champRows.length && supabase.from("slot_champions").insert(champRows),
+    pickRows.length  && supabase.from("bracket_picks").insert(pickRows),
+  ].filter(Boolean));
+}
+
 // ─── Trending preferences ─────────────────────────────────────────────────────
 
 export async function loadTrendingPrefs(userId, categoryId) {

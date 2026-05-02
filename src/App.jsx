@@ -34,8 +34,11 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import TrendingOnboarding, { TrendingBanner, TrendingControlsSheet } from "./shared/TrendingOnboarding.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
+import { useAuth } from "./lib/AuthContext.jsx";
+import { loadShelf, syncShelfData, migrateLocalStorageToSupabase } from "./lib/db.js";
 
 const CAT = getCategoryConfig();
+const CATEGORY_ID = "books";
 
 // ─── Book-specific modules ──────────────────────────────────────────────────
 import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, fetchGenreTrending, enrichBooks, searchBooks } from "./categories/books/data.js";
@@ -190,6 +193,7 @@ function ShareOverlay({ data, year, onClose }) {
 
 // ─── App Shell ────────────────────────────────────────────────────────────────
 export default function App() {
+  const { user } = useAuth();
   const [data,     setData]     = useState(null);
   const [trendingData,  setTrendingData]  = useState(null);
   const [loading,  setLoading]  = useState(true);
@@ -202,17 +206,34 @@ export default function App() {
 
   const markOb = (updates) => setOb(setOnboarding(updates));
 
+  // Initial load. When signed in we fetch from Supabase (source of truth);
+  // otherwise we fall back to localStorage and the DEV Goodreads bootstrap.
   useEffect(() => {
     migrateStorage();
-    const existing = store.get(year);
-    if (existing) {
-      setData(existing);
-      setLoading(false);
-      return;
-    }
-    // DEV: auto-load Tara's Goodreads shelf for testing — remove before production
-    const DEV_GOODREADS_USER = "152670076";
+
     (async () => {
+      if (user) {
+        // Push any pre-existing local data up to Supabase the first time the
+        // user signs in, then load the (now-canonical) DB shelf.
+        await migrateLocalStorageToSupabase(user.id, CATEGORY_ID, year);
+        const remote = await loadShelf(user.id, CATEGORY_ID, year);
+        setData(remote);
+        store.set(year, remote); // refresh cache
+        setTrendingData(trendingStore.get(year) || freshTrendingData());
+        setLoading(false);
+        return;
+      }
+
+      const existing = store.get(year);
+      if (existing) {
+        setData(existing);
+        setTrendingData(trendingStore.get(year) || freshTrendingData());
+        setLoading(false);
+        return;
+      }
+
+      // DEV: auto-load Tara's Goodreads shelf for testing — remove before production
+      const DEV_GOODREADS_USER = "152670076";
       try {
         const allBooks = await fetchAllGoodreadsBooks(DEV_GOODREADS_USER);
         const byYear = {};
@@ -241,17 +262,40 @@ export default function App() {
       setTrendingData(trendingStore.get(year) || freshTrendingData());
       setLoading(false);
     })();
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!loading) {
-      setData(store.get(year) || freshData());
+      if (user) {
+        loadShelf(user.id, CATEGORY_ID, year).then(remote => {
+          setData(remote);
+          store.set(year, remote);
+        });
+      } else {
+        setData(store.get(year) || freshData());
+      }
       setTrendingData(trendingStore.get(year) || freshTrendingData());
       setBattleId(null);
     }
   }, [year]);
 
-  const save = (nd) => { setData({ ...nd }); store.set(year, nd); };
+  // Debounced Supabase sync — runs 800ms after the last save() call.
+  // localStorage is updated immediately for instant UI; Supabase catches up.
+  const syncTimer = useRef(null);
+  const queueSync = useCallback((nd) => {
+    if (!user) return;
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      syncShelfData(user.id, CATEGORY_ID, year, nd).catch(err =>
+        console.error("Shelf sync failed:", err));
+    }, 800);
+  }, [user, year]);
+
+  const save = (nd) => {
+    setData({ ...nd });
+    store.set(year, nd);
+    queueSync(nd);
+  };
   const saveTrending = (nd) => { setTrendingData({ ...nd }); trendingStore.set(year, nd); };
 
   const NAV = [
