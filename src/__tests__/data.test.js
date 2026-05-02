@@ -216,11 +216,18 @@ describe('enrichBooks', () => {
   const olResponse = (subjects) =>
     Promise.resolve({ ok: true, json: () => Promise.resolve({ docs: [{ subject: subjects }] }) });
 
-  it('skips books that already have a categories array', async () => {
-    const book = { id: '1', title: 'Dune', author: 'Herbert', categories: ['sci_fi'], tags: [] };
+  it('skips books already marked _enriched', async () => {
+    const book = { id: '1', title: 'Dune', author: 'Herbert', categories: ['sci_fi'], tags: [], _enriched: true };
     const result = await enrichBooks([book]);
     expect(fetch).not.toHaveBeenCalled();
     expect(result[0]).toBe(book);
+  });
+
+  it('re-enriches books with categories:[] (failed previous attempt)', async () => {
+    fetch.mockReturnValue(olResponse([]));
+    const book = { id: '1', title: 'X', author: 'Y', description: '', categories: [], tags: [] };
+    await enrichBooks([book]);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('fetches Open Library subjects for unenriched books', async () => {

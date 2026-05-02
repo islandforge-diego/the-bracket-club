@@ -1248,7 +1248,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, 
   const rankedBooks = rankTrending(m.books, trendingPrefs);
 
   useEffect(() => {
-    const needsEnrich = m.books.length > 0 && m.books.some(b => b.categories === undefined);
+    const needsEnrich = m.books.length > 0 && m.books.some(b => !b._enriched);
     if (needsEnrich) {
       enrichBooks(m.books).then(books => {
         const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };

@@ -208,21 +208,36 @@ export function parseTrendingBooksHTML(html, limit = 12) {
 
 // ─── Book enrichment ─────────────────────────────────────────────────────────
 
+// Open Library subject strings (case-insensitive substring match)
 const SUBJECT_CATEGORY_MAP = {
-  fantasy:            ["fantasy", "magic", "wizard", "dragon", "fae", "fairy tale", "fairy stories", "witches", "sorcery"],
-  sci_fi:             ["science fiction", "science-fiction", "sci-fi", "space", "dystopia", "dystopian", "cyberpunk", "time travel", "extraterrestrial", "apocalyptic"],
-  romance:            ["romance", "romantic", "love stories", "love story"],
-  mystery_thriller:   ["mystery", "thriller", "detective", "crime fiction", "suspense", "noir", "spy", "espionage"],
+  fantasy:            ["fantasy", "magic", "wizard", "dragon", "fae", "fairy tale", "fairy stories", "witches", "sorcery", "enchant"],
+  sci_fi:             ["science fiction", "science-fiction", "sci-fi", "space opera", "dystopia", "dystopian", "cyberpunk", "time travel", "extraterrestrial", "apocalyptic", "speculative fiction"],
+  romance:            ["romance", "romantic", "love stories", "love story", "chick lit", "women's fiction", "man-woman relationships", "courtship"],
+  mystery_thriller:   ["mystery", "thriller", "detective", "crime fiction", "suspense", "noir", "spy", "espionage", "murder", "police"],
   horror:             ["horror", "ghost stories", "ghost story", "vampire", "occult", "supernatural fiction"],
-  literary_fiction:   ["literary fiction", "psychological fiction", "general fiction"],
-  historical_fiction: ["historical fiction", "history -- fiction", "historical -- fiction"],
+  literary_fiction:   ["literary fiction", "psychological fiction", "general fiction", "domestic fiction"],
+  historical_fiction: ["historical fiction", "history -- fiction", "historical -- fiction", "war stories"],
   nonfiction:         ["nonfiction", "non-fiction", "narrative nonfiction", "journalism", "essays", "true crime", "popular science", "popular culture"],
   memoir_biography:   ["biography", "autobiography", "memoir", "biographical", "personal narratives"],
-  business:           ["business", "economics", "finance", "entrepreneurship", "management", "leadership"],
-  self_improvement:   ["self-help", "personal development", "motivation", "productivity", "mindfulness", "psychology"],
+  business:           ["business", "economics", "finance", "entrepreneurship", "management", "leadership", "investing", "marketing", "startup"],
+  self_improvement:   ["self-help", "personal development", "motivation", "productivity", "mindfulness", "psychology", "habits", "happiness"],
   young_adult:        ["young adult", "ya fiction", "teen fiction", "juvenile fiction", "children"],
   classics:           ["classics", "classic literature", "19th century fiction", "18th century fiction", "victorian"],
   graphic_novels:     ["comics", "graphic novel", "graphic novels", "manga", "illustrated"],
+};
+
+// Description text signals — fills gaps when Open Library subjects are too vague.
+// These strings are checked against the full book description (lowercased).
+const DESCRIPTION_CATEGORY_MAP = {
+  romance:            ["fall in love", "falling in love", "love story", "second chance", "enemies to lovers", "forbidden love", "soulmate", "happily ever after", "steamy", "swoon", "their hearts", "sweeping romance", "romantic"],
+  fantasy:            ["magic system", "chosen one", "dark lord", "ancient magic", "mythical", "enchanted forest", "quest to"],
+  sci_fi:             ["space station", "alien species", "starship", "far future", "genetic engineering", "dystopian society"],
+  mystery_thriller:   ["serial killer", "cold case", "missing person", "forensic", "under suspicion", "the killer"],
+  horror:             ["haunted house", "supernatural evil", "unspeakable terror", "cursed"],
+  business:           ["ceo", "startup founder", "venture capital", "wall street", "corporate", "entrepreneur", "business strategy"],
+  memoir_biography:   ["growing up in", "my life", "true story", "first-hand", "personal journey"],
+  self_improvement:   ["habits of", "how to achieve", "transform your", "unlock your potential", "proven method"],
+  historical_fiction: ["set in the", "world war", "ancient rome", "victorian era", "18th century", "19th century"],
 };
 
 const TAG_KEYWORD_MAP = {
@@ -244,6 +259,17 @@ function mapSubjectsToCategories(subjects) {
     .map(([id]) => id);
 }
 
+// Secondary signal: infer genre from the book's description text.
+// Open Library subjects are often too generic ("Fiction", "American fiction")
+// so description keywords act as a reliable fallback.
+function inferCategoriesFromDescription(description) {
+  if (!description) return [];
+  const lower = description.toLowerCase();
+  return Object.entries(DESCRIPTION_CATEGORY_MAP)
+    .filter(([, keywords]) => keywords.some(kw => lower.includes(kw)))
+    .map(([id]) => id);
+}
+
 function inferTagsFromDescription(description) {
   if (!description) return [];
   const lower = description.toLowerCase();
@@ -254,16 +280,26 @@ function inferTagsFromDescription(description) {
 
 export async function enrichBooks(books) {
   return Promise.all(books.map(async book => {
-    if (book.categories !== undefined) return book;
+    // _enriched flag means we already ran the full pipeline on this book.
+    // Checking categories !== undefined is not enough — an empty [] result
+    // from a failed OL lookup would permanently block re-enrichment otherwise.
+    if (book._enriched) return book;
     try {
       const q = [book.title, book.author].filter(Boolean).join(" ");
       const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=subject&limit=1`);
       const data = await res.json();
       const subjects = data.docs?.[0]?.subject || [];
-      const categories = mapSubjectsToCategories(subjects);
+
+      // Combine Open Library subjects + description signals, deduplicated
+      const fromSubjects = mapSubjectsToCategories(subjects);
+      const fromDesc = inferCategoriesFromDescription(book.description);
+      const categories = [...new Set([...fromSubjects, ...fromDesc])];
       const tags = inferTagsFromDescription(book.description);
-      return { ...book, categories, tags };
+
+      return { ...book, categories, tags, _enriched: true };
     } catch {
+      // On network failure, store empty arrays but do NOT set _enriched so
+      // the next load retries the lookup.
       return { ...book, categories: [], tags: [] };
     }
   }));
