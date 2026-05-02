@@ -28,17 +28,31 @@ export function AuthProvider({ children }) {
       setLoading(false);
     });
 
-    // Keep in sync with Supabase auth events (sign in, sign out, token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    // Keep in sync with Supabase auth events (sign in, sign out, token refresh).
+    // Also persist any pending marketing consent that was checked before the
+    // user actually existed (email confirm flow, OAuth redirect).
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
+
+      if (event === "SIGNED_IN" && s?.user) {
+        const pending = localStorage.getItem("pending_marketing_consent");
+        if (pending === "1") {
+          await supabase.from("profiles").update({
+            marketing_consent: true,
+            consented_at:      new Date().toISOString(),
+          }).eq("id", s.user.id);
+          localStorage.removeItem("pending_marketing_consent");
+        }
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  const signUp = useCallback(async ({ email, password, displayName }) => {
+  const signUp = useCallback(async ({ email, password, displayName, marketingConsent }) => {
     if (!supabase) return { error: new Error("Supabase not configured") };
+    if (marketingConsent) localStorage.setItem("pending_marketing_consent", "1");
     return supabase.auth.signUp({
       email,
       password,
@@ -51,8 +65,9 @@ export function AuthProvider({ children }) {
     return supabase.auth.signInWithPassword({ email, password });
   }, []);
 
-  const signInWithGoogle = useCallback(async () => {
+  const signInWithGoogle = useCallback(async ({ marketingConsent } = {}) => {
     if (!supabase) return { error: new Error("Supabase not configured") };
+    if (marketingConsent) localStorage.setItem("pending_marketing_consent", "1");
     return supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },

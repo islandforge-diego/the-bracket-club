@@ -40,6 +40,7 @@ export default function LoginModal({ onClose }) {
   const [email, setEmail]   = useState("");
   const [pass, setPass]     = useState("");
   const [name, setName]     = useState("");
+  const [consent, setConsent] = useState(true); // pre-checked, opt-in only on signup
   const [error, setError]   = useState(null);
   const [busy, setBusy]     = useState(false);
   const [sent, setSent]     = useState(false);
@@ -50,7 +51,7 @@ export default function LoginModal({ onClose }) {
     setError(null);
 
     const { error: err } = mode === "signup"
-      ? await signUp({ email, password: pass, displayName: name })
+      ? await signUp({ email, password: pass, displayName: name, marketingConsent: consent })
       : await signIn({ email, password: pass });
 
     setBusy(false);
@@ -61,7 +62,11 @@ export default function LoginModal({ onClose }) {
 
   async function handleGoogle() {
     setBusy(true);
-    const { error: err } = await signInWithGoogle();
+    // Google is treated as both sign-in and sign-up. Capture consent only when
+    // the modal is in signup mode so existing users aren't re-opted-in.
+    const { error: err } = await signInWithGoogle({
+      marketingConsent: mode === "signup" ? consent : false,
+    });
     setBusy(false);
     if (err) setError(err.message);
     // OAuth redirects away — no onClose needed
@@ -145,6 +150,20 @@ export default function LoginModal({ onClose }) {
                 style={INPUT} type="password" placeholder="Password"
                 value={pass} onChange={e => setPass(e.target.value)} required minLength={6}
               />
+
+              {mode === "signup" && (
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "#475569", marginBottom: 14, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={consent}
+                    onChange={e => setConsent(e.target.checked)}
+                    style={{ marginTop: 2, cursor: "pointer" }}
+                  />
+                  <span>
+                    Send me occasional updates about new features and categories — you're an early user, your input matters.
+                  </span>
+                </label>
+              )}
 
               {error && (
                 <div style={{ color: "#ef4444", fontSize: 13, marginBottom: 12, padding: "8px 12px", background: "#fef2f2", borderRadius: 8 }}>
