@@ -10,6 +10,7 @@ import ItemSearch from "./shared/ItemSearch.jsx";
 import { getCategoryConfig } from "./shared/categoryConfig.js";
 import { getOnboarding, setOnboarding } from "./shared/onboarding.js";
 import Welcome from "./shared/Welcome.jsx";
+import Tour from "./shared/Tour.jsx";
 
 const CAT = getCategoryConfig();
 
@@ -174,6 +175,7 @@ export default function App() {
   const [year,     setYear]     = useState(new Date().getFullYear());
   const [showShare, setShowShare] = useState(false);
   const [ob, setOb] = useState(getOnboarding);
+  const [tourActive, setTourActive] = useState(false);
 
   const markOb = (updates) => setOb(setOnboarding(updates));
 
@@ -309,7 +311,14 @@ export default function App() {
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
       {!ob.hasSeenWelcome && !loading && (
-        <Welcome config={CAT} onDone={() => markOb({ hasSeenWelcome: true })} />
+        <Welcome
+          config={CAT}
+          onStartTour={() => { markOb({ hasSeenWelcome: true }); setView("home"); setTourActive(true); }}
+          onSkip={() => markOb({ hasSeenWelcome: true })}
+        />
+      )}
+      {tourActive && (
+        <Tour config={CAT} setView={setView} onDone={() => setTourActive(false)} />
       )}
     </div>
   );
@@ -337,7 +346,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
 
       {/* ── Year Reads grid ── */}
       <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
-        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
+        <div data-tour="year-nav" style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
           <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
           <div style={{ textAlign:"center" }}>
             <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Your Reads</div>
@@ -345,7 +354,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
           </div>
           <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
+        <div data-tour="home-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
             const hasBooksButNoPick = !pick && (data.months[i].books?.length > 0);
@@ -396,7 +405,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
 
       {/* ── Bottom row: Import + Share ── */}
       <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-        <button onClick={goImport} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
+        <button data-tour="import-btn" onClick={goImport} style={{ flex:1, background:"#fff", border:"1px solid #e7e5e4", borderRadius:12, padding:"9px 8px", display:"flex", alignItems:"center", justifyContent:"center", gap:5, cursor:"pointer" }}>
           <span style={{ fontSize:15 }}>📥</span>
           <span style={{ fontWeight:700, color:"#14532d", fontSize:12 }}>Import</span>
         </button>
@@ -1101,7 +1110,7 @@ function Popular({ trendingData, saveTrending, year, setYear, ob, markOb }) {
           </div>
           <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
+        <div data-tour="trending-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
             const hasBooks = trendingData.months[i].books?.length > 0;
@@ -1431,6 +1440,7 @@ function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattl
     <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
       <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", textAlign:"center" }}>Brackets</div>
 
+      <div data-tour="bracket-hub" style={{ display:"flex", flexDirection:"column", gap:12 }}>
       <button onClick={() => setMode("shelf")} style={cardStyle}>
         <span style={{ fontSize:28 }}>📚</span>
         <div style={{ flex:1 }}>
@@ -1452,6 +1462,7 @@ function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattl
         </div>
         <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
       </button>
+      </div>
     </div>
   );
 }
