@@ -9,8 +9,11 @@ import Cover from "./shared/Cover.jsx";
 import ItemSearch from "./shared/ItemSearch.jsx";
 import { getCategoryConfig } from "./shared/categoryConfig.js";
 import { getOnboarding, setOnboarding } from "./shared/onboarding.js";
+import { getTrendingPrefs, setTrendingPrefs, resetTrendingPrefs } from "./shared/trendingPreferences.js";
+import { rankTrending } from "./shared/rankTrending.js";
 import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
+import TrendingOnboarding, { TrendingBanner, TrendingControlsSheet } from "./shared/TrendingOnboarding.jsx";
 
 const CAT = getCategoryConfig();
 
@@ -1076,68 +1079,124 @@ function Month({ data, save, idx, setIdx, onBack }) {
 // ─── Popular (Trending Grid) ────────────────────────────────────────────────
 function Popular({ trendingData, saveTrending, year, setYear, ob, markOb }) {
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [trendingPrefs, setTrendingPrefs_] = useState(() => getTrendingPrefs(CAT.id));
+  const [showControls, setShowControls] = useState(false);
+  const [editingPrefs, setEditingPrefs] = useState(false);
+
   const thisYear = new Date().getFullYear();
   const picks = trendingData.months.map(m => m.winner);
   const count = picks.filter(Boolean).length;
 
+  const showOnboarding = !trendingPrefs.onboardingCompleted || editingPrefs;
+
+  const savePrefs = (updates) => {
+    const next = setTrendingPrefs(CAT.id, updates);
+    setTrendingPrefs_(next);
+    return next;
+  };
+
+  const handleComplete = ({ personalizationEnabled, preferences }) => {
+    savePrefs({ onboardingCompleted: true, personalizationEnabled, preferences, externalSource: CAT.source });
+    markOb({ hasViewedTrending: true });
+    setEditingPrefs(false);
+  };
+
+  const handleSkip = () => {
+    savePrefs({ onboardingCompleted: true, personalizationEnabled: false });
+    markOb({ hasViewedTrending: true });
+    setEditingPrefs(false);
+  };
+
+  const handleReset = () => {
+    const next = resetTrendingPrefs(CAT.id);
+    setTrendingPrefs_(next);
+    setShowControls(false);
+  };
+
+  const handleRefresh = () => {
+    const cleared = { ...trendingData, months: trendingData.months.map(m => ({ ...m, books: [] })) };
+    saveTrending(cleared);
+    savePrefs({ resultsLastRefreshedAt: Date.now() });
+    setShowControls(false);
+  };
+
   if (selectedMonth !== null) {
-    return <TrendingMonth trendingData={trendingData} saveTrending={saveTrending} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} />;
+    return <TrendingMonth trendingData={trendingData} saveTrending={saveTrending} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} trendingPrefs={trendingPrefs} />;
   }
 
   return (
-    <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
-
-      {/* Trending intro card — dismissible */}
-      {!ob.hasViewedTrending && (
-        <div style={{ background:"#fff7ed", borderRadius:14, padding:"12px 14px", display:"flex", alignItems:"flex-start", gap:10, flexShrink:0 }}>
-          <span style={{ fontSize:20, flexShrink:0, marginTop:2 }}>🔥</span>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:800, fontSize:13, color:"#1c1917", marginBottom:2 }}>This is a separate bracket</div>
-            <div style={{ fontSize:11, color:"#78716c", lineHeight:1.5 }}>
-              Trending shows popular {CAT.plural} from {CAT.source} — not your personal {CAT.plural}. Pick favorites here to build a second bracket.
-            </div>
-          </div>
-          <button onClick={() => markOb({ hasViewedTrending: true })} style={{ background:"none", border:"none", color:"#9ca3af", fontSize:14, cursor:"pointer", padding:0, flexShrink:0, marginTop:2 }}>✕</button>
-        </div>
+    <>
+      {/* Trending onboarding / preferences modal */}
+      {showOnboarding && (
+        <TrendingOnboarding
+          config={CAT}
+          editMode={editingPrefs}
+          initialPreferences={editingPrefs ? trendingPrefs.preferences : undefined}
+          onComplete={handleComplete}
+          onSkip={handleSkip}
+        />
       )}
 
-      <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
-        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
-          <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
-          <div style={{ textAlign:"center" }}>
-            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Top Trending</div>
-            <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
+      {/* Controls sheet */}
+      {showControls && (
+        <TrendingControlsSheet
+          prefs={trendingPrefs}
+          onEdit={() => { setEditingPrefs(true); setShowControls(false); }}
+          onReset={handleReset}
+          onRefresh={handleRefresh}
+          onClose={() => setShowControls(false)}
+        />
+      )}
+
+      <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
+
+        {/* Personalization status banner */}
+        {trendingPrefs.onboardingCompleted && (
+          <TrendingBanner
+            prefs={trendingPrefs}
+            onPersonalize={() => setEditingPrefs(true)}
+            onOpenControls={() => setShowControls(s => !s)}
+          />
+        )}
+
+        <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
+          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
+            <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Top Trending</div>
+              <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
+            </div>
+            <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
           </div>
-          <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
-        </div>
-        <div data-tour="trending-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
-          {MONTHS.map((m, i) => {
-            const pick = picks[i];
-            const hasBooks = trendingData.months[i].books?.length > 0;
-            return (
-              <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
-                <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
-                {pick ? (
-                  <div style={{ position:"relative", flex:1, display:"flex" }}>
-                    <Cover book={pick} size="md" />
-                    <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
-                  </div>
-                ) : (
-                  <div style={{ flex:1, width:56, borderRadius:6, background: hasBooks?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooks?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
-                    {hasBooks ? <span style={{ fontSize:12 }}>🔥</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
-                  </div>
-                )}
-              </button>
-            );
-          })}
+          <div data-tour="trending-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
+            {MONTHS.map((m, i) => {
+              const pick = picks[i];
+              const hasBooks = trendingData.months[i].books?.length > 0;
+              return (
+                <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+                  <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
+                  {pick ? (
+                    <div style={{ position:"relative", flex:1, display:"flex" }}>
+                      <Cover book={pick} size="md" />
+                      <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
+                    </div>
+                  ) : (
+                    <div style={{ flex:1, width:56, borderRadius:6, background: hasBooks?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooks?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
+                      {hasBooks ? <span style={{ fontSize:12 }}>🔥</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
 // ─── Trending Month Detail ──────────────────────────────────────────────────
-function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack }) {
+function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, trendingPrefs }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showBracket, setShowBracket] = useState(false);
@@ -1147,6 +1206,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack }
 
   const m = trendingData.months[idx];
   const monthPicks = m.bracketPicks || {};
+  const rankedBooks = rankTrending(m.books, trendingPrefs);
 
   useEffect(() => {
     if (m.books.length > 0) return;
@@ -1399,7 +1459,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack }
         </button>
       )}
 
-      {!loading && m.books.map((book, bi) => (
+      {!loading && rankedBooks.map((book, bi) => (
         <div key={book.id} style={{ display:"flex", alignItems:"center", gap:10, background:"#fff", borderRadius:14, padding:"10px 12px", border:`2px solid ${m.winner?.id === book.id ? "#22c55e" : "#e7e5e4"}` }}>
           <div style={{ fontSize:14, fontWeight:800, color:"#14532d", width:22, textAlign:"center", flexShrink:0 }}>{bi + 1}</div>
           <Cover book={book} size="sm" />
