@@ -98,9 +98,23 @@ export default function Tour({ config, setView, onDone }) {
   const spotW    = rect ? rect.width  + PAD * 2 : 0;
   const spotH    = rect ? rect.height + PAD * 2 : 0;
 
-  // Tooltip goes below if the element's centre is in the top 55% of screen
-  const showBelow = rect ? (rect.top + rect.height / 2) < screenH * 0.55 : true;
-  const TOOLTIP_GAP = 16;
+  const TOOLTIP_GAP = 12;
+  const TOOLTIP_MIN_SPACE = 240; // px needed to show tooltip outside the spotlight
+
+  const spaceBelow = rect ? screenH - (spotTop + spotH) - TOOLTIP_GAP : 0;
+  const spaceAbove = rect ? spotTop - TOOLTIP_GAP : 0;
+
+  let tooltipPos;
+  if (!rect) {
+    tooltipPos = { bottom: 16 };
+  } else if (spaceBelow >= TOOLTIP_MIN_SPACE) {
+    tooltipPos = { top: spotTop + spotH + TOOLTIP_GAP };
+  } else if (spaceAbove >= TOOLTIP_MIN_SPACE) {
+    tooltipPos = { bottom: screenH - spotTop + TOOLTIP_GAP };
+  } else {
+    // Element fills most of the screen — pin tooltip to bottom, overlapping spotlight
+    tooltipPos = { bottom: 16 };
+  }
 
   return (
     <>
@@ -142,9 +156,7 @@ export default function Tour({ config, setView, onDone }) {
         style={{
           position: "fixed",
           left: 16, right: 16,
-          ...(showBelow
-            ? { top: rect ? spotTop + spotH + TOOLTIP_GAP : screenH - 220 }
-            : { bottom: rect ? screenH - spotTop + TOOLTIP_GAP : 40 }),
+          ...tooltipPos,
           zIndex: 503,
           background: "#fff",
           borderRadius: 20,
