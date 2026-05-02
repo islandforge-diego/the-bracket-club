@@ -7,6 +7,11 @@ import { createStore, freshData, freshTrendingData, migrateStorage } from "./sha
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
 import ItemSearch from "./shared/ItemSearch.jsx";
+import { getCategoryConfig } from "./shared/categoryConfig.js";
+import { getOnboarding, setOnboarding } from "./shared/onboarding.js";
+import Welcome from "./shared/Welcome.jsx";
+
+const CAT = getCategoryConfig();
 
 // ─── Book-specific modules ──────────────────────────────────────────────────
 import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, searchBooks } from "./categories/books/data.js";
@@ -28,7 +33,7 @@ function ShareOverlay({ data, year, onClose }) {
   const [cardIdx, setCardIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const swipeRef = useRef(null);
-  const LABELS = ["Monthly Picks", "Top 3", "Book of the Year"];
+  const LABELS = ["Monthly Picks", "Top 3", CAT.champion];
 
   useEffect(() => {
     let urls = [];
@@ -168,6 +173,9 @@ export default function App() {
   const [battleId, setBattleId] = useState(null);
   const [year,     setYear]     = useState(new Date().getFullYear());
   const [showShare, setShowShare] = useState(false);
+  const [ob, setOb] = useState(getOnboarding);
+
+  const markOb = (updates) => setOb(setOnboarding(updates));
 
   useEffect(() => {
     migrateStorage();
@@ -272,13 +280,13 @@ export default function App() {
         <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd} style={{ flex:1, height:0, overflow:"hidden" }}>
           <div style={{ display:"flex", width:"300%", height:"100%", transform:`translateX(-${viewIdx*(100/3)}%)`, transition:"transform 0.3s ease-out" }}>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} />
+              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Popular trendingData={trendingData || freshTrendingData()} saveTrending={saveTrending} year={year} setYear={setYear} />
+              <Popular trendingData={trendingData || freshTrendingData()} saveTrending={saveTrending} year={year} setYear={setYear} ob={ob} markOb={markOb} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <BracketHub data={data} trendingData={trendingData || freshTrendingData()} save={save} saveTrending={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} />
+              <BracketHub data={data} trendingData={trendingData || freshTrendingData()} save={save} saveTrending={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
           </div>
         </div>
@@ -300,16 +308,20 @@ export default function App() {
       )}
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
+      {!ob.hasSeenWelcome && !loading && (
+        <Welcome config={CAT} onDone={() => markOb({ hasSeenWelcome: true })} />
+      )}
     </div>
   );
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
-function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare }) {
+function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare, ob, markOb }) {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const thisYear = new Date().getFullYear();
   const picks      = data.months.map(m => m.winner);
   const count      = picks.filter(Boolean).length;
+  const totalItems = data.months.reduce((n, m) => n + m.books.length, 0);
   const readyMatch = MATCHES.find(m => {
     if (data.bracket[m.id]) return false;
     const { b1, b2 } = getBooks(m, data.months, data.bracket);
@@ -355,6 +367,18 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare 
           })}
         </div>
       </div>
+
+      {/* ── First-time hint ── */}
+      {totalItems === 0 && (
+        <div style={{ background:"#fff", borderRadius:14, padding:"14px 16px", boxShadow:"0 1px 4px #0001", textAlign:"center", flexShrink:0 }}>
+          <div style={{ fontWeight:800, fontSize:14, color:"#1c1917", marginBottom:4 }}>
+            Start with {FULL[curM]}, or any month you've finished a {CAT.singular}.
+          </div>
+          <div style={{ fontSize:12, color:"#9ca3af", lineHeight:1.5 }}>
+            Tap a month to add {CAT.plural} you {CAT.pastVerb}, then star your favorite to build the bracket.
+          </div>
+        </div>
+      )}
 
       {/* ── Bracket CTA ── */}
       {count >= 2 && (
@@ -921,10 +945,12 @@ function Month({ data, save, idx, setIdx, onBack }) {
       {/* Helper text + bracket button */}
       <div style={{ fontSize:12, color:"#9ca3af", textAlign:"center" }}>
         {m.books.length === 0
-          ? "Add books you read this month, then pick your favourite."
+          ? `Add ${CAT.plural} you ${CAT.pastVerb} this month, then pick your favourite.`
           : m.winner
           ? `⭐ ${m.winner.title} is your pick for the bracket.`
-          : "Add your books, then use the bracket to pick your favourite."}
+          : m.books.length === 1
+          ? `Star this ${CAT.singular} to make it your monthly contender, or add more to battle them.`
+          : `Use the bracket below to pick your favourite — that ${CAT.singular} enters the yearly tournament.`}
       </div>
 
       {m.books.length >= 2 && (
@@ -1039,7 +1065,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 }
 
 // ─── Popular (Trending Grid) ────────────────────────────────────────────────
-function Popular({ trendingData, saveTrending, year, setYear }) {
+function Popular({ trendingData, saveTrending, year, setYear, ob, markOb }) {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const thisYear = new Date().getFullYear();
   const picks = trendingData.months.map(m => m.winner);
@@ -1051,6 +1077,21 @@ function Popular({ trendingData, saveTrending, year, setYear }) {
 
   return (
     <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
+
+      {/* Trending intro card — dismissible */}
+      {!ob.hasViewedTrending && (
+        <div style={{ background:"#fff7ed", borderRadius:14, padding:"12px 14px", display:"flex", alignItems:"flex-start", gap:10, flexShrink:0 }}>
+          <span style={{ fontSize:20, flexShrink:0, marginTop:2 }}>🔥</span>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:800, fontSize:13, color:"#1c1917", marginBottom:2 }}>This is a separate bracket</div>
+            <div style={{ fontSize:11, color:"#78716c", lineHeight:1.5 }}>
+              Trending shows popular {CAT.plural} from {CAT.source} — not your personal {CAT.plural}. Pick favorites here to build a second bracket.
+            </div>
+          </div>
+          <button onClick={() => markOb({ hasViewedTrending: true })} style={{ background:"none", border:"none", color:"#9ca3af", fontSize:14, cursor:"pointer", padding:0, flexShrink:0, marginTop:2 }}>✕</button>
+        </div>
+      )}
+
       <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
         <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
           <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
@@ -1369,7 +1410,7 @@ function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack }
 }
 
 // ─── Bracket Hub ─────────────────────────────────────────────────────────────
-function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattleId, year, openShare }) {
+function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattleId, year, openShare, ob, markOb }) {
   const [mode, setMode] = useState(null);
 
   if (mode === "shelf") {
@@ -1514,7 +1555,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
         </button>
         <div style={{ textAlign:"center" }}>
           <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>The Final</div>
-          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick your Book of the Year</div>
+          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick your {CAT.champion}</div>
         </div>
         <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
           {top3.map(book => {
@@ -1538,7 +1579,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
         </div>
         {finalWinner && (
           <div style={{ textAlign:"center" }}>
-            <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>"{finalWinner.title}" is your Best Read of {year}!</div>
+            <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>"{finalWinner.title}" is your {CAT.champion} {year}!</div>
             <button onClick={() => clearVote("final")}
               style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
           </div>
@@ -1591,10 +1632,14 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
       {/* Empty state */}
       {!anyR1Ready && (
         <div style={{ background:"#fff", borderRadius:20, padding:"32px 24px", textAlign:"center", boxShadow:"0 1px 4px #0001" }}>
-          <div style={{ fontSize:52, marginBottom:12 }}>📚</div>
-          <div style={{ fontWeight:800, fontSize:16, color:"#1c1917", marginBottom:8 }}>Build your bracket</div>
-          <div style={{ fontSize:13, color:"#9ca3af", lineHeight:1.7 }}>
-            Star your favourite book each month to start filling in the bracket.
+          <div style={{ fontSize:52, marginBottom:12 }}>{CAT.icon}</div>
+          <div style={{ fontWeight:800, fontSize:16, color:"#1c1917", marginBottom:8 }}>Your bracket awaits</div>
+          <div style={{ fontSize:13, color:"#9ca3af", lineHeight:1.7, marginBottom:12 }}>
+            Pick a favourite {CAT.singular} each month — those winners become your bracket contenders.
+          </div>
+          <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"#f0fdf4", borderRadius:99, padding:"6px 14px" }}>
+            <span style={{ fontSize:14 }}>⭐</span>
+            <span style={{ fontSize:12, fontWeight:700, color:"#15803d" }}>{pickCount} of 12 monthly winners chosen</span>
           </div>
         </div>
       )}
@@ -1726,11 +1771,11 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
           }}>
             {finalWinner ? (
               <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:8 }}>
-                <div style={{ fontSize:11, opacity:.7, textTransform:"uppercase", letterSpacing:2 }}>Book of the Year</div>
+                <div style={{ fontSize:11, opacity:.7, textTransform:"uppercase", letterSpacing:2 }}>{CAT.champion}</div>
                 <Cover book={finalWinner} size="xl" />
                 <div style={{ fontWeight:800, fontSize:18 }}>{finalWinner.title}</div>
                 {finalWinner.author && <div style={{ fontSize:13, opacity:.8 }}>{finalWinner.author}</div>}
-                <div style={{ fontSize:22, marginTop:4 }}>Best Read of {year}</div>
+                <div style={{ fontSize:22, marginTop:4 }}>{CAT.champion} {year}</div>
                 <button onClick={() => clearVote("final")}
                   style={{ fontSize:11, background:"rgba(255,255,255,.2)", border:"none", color:"#fff", padding:"4px 12px", borderRadius:99, marginTop:4, cursor:"pointer" }}>Change pick</button>
               </div>
@@ -1752,7 +1797,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
               </div>
             ) : (
               <div>
-                <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, marginBottom:8 }}>Book of the Year</div>
+                <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, marginBottom:8 }}>{CAT.champion}</div>
                 <div style={{ width:56, height:80, borderRadius:6, background:"#f5f5f4", margin:"0 auto", display:"flex", alignItems:"center", justifyContent:"center" }}>
                   <span style={{ fontSize:18, color:"#d6d3d1" }}>👑</span>
                 </div>
