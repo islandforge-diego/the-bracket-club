@@ -44,66 +44,121 @@ async function getSeasonId(categoryId, year) {
 
 // ─── Items (shared catalog) ───────────────────────────────────────────────────
 
-// Upsert a book into the shared items catalog and return its UUID.
-// Uses goodreads_id if present, otherwise matches on title+creator.
-export async function ensureItem(book, categoryId) {
+/**
+ * Upsert a book into the shared items catalog and return its UUID.
+ *
+ * Dedup priority — first match wins, subsequent users reuse the same row:
+ *   1. (source='google_books', source_id=googleBooksId)  ← seeded catalog
+ *   2. external_ids->>'isbn_13' = isbn13
+ *   3. external_ids->>'goodreads_id' = goodreadsId       ← legacy RSS imports
+ *
+ * If nothing matches, inserts a new user-owned row.  The new row carries
+ * source/source_id when we have them so the *next* user adding the same
+ * book will reuse this row instead of creating a third copy.
+ *
+ * RLS requires non-admin inserts to set created_by_user_id = auth.uid().
+ * userId must be passed for user-initiated saves.
+ */
+// UUID v4 shape — used to detect books that came back from loadShelf already
+// tracked in items.  These don't need re-insertion; just trust the id.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function ensureItem(book, categoryId, userId = null) {
   if (!supabase) return null;
 
-  const goodreadsId = book.goodreadsId || book.id || null;
-  // creators is always an array — handles co-authors, director+writers, studio+publisher
-  const creators = book.creators || (book.author ? [book.author] : []);
-  const payload = {
-    category_id:  categoryId,
-    title:        book.title || "",
-    creators,
-    cover_url:    book.cover  || book.cover_url || null,
-    description:  book.description || null,
-    genres:       book.categories || [],
-    tags:         book.tags || [],
-    metadata:     book.metadata || {},
-    external_ids: goodreadsId ? { goodreads_id: String(goodreadsId) } : {},
-    // Track which source enriched this and when — replaces flat enriched_at
-    data_sources: book._enriched ? {
-      open_library: { fetched_at: new Date().toISOString(), fields: ["genres", "tags"] },
-    } : {},
-  };
+  // Short-circuit: book.id looks like a UUID → already in items, reuse it
+  // (avoids creating a duplicate row every time we save a previously-loaded
+  // shelf).  Cheap O(1) check before any network round-trip.
+  if (typeof book.id === "string" && UUID_RE.test(book.id)) return book.id;
 
-  // Try to find an existing item by goodreads_id first
+  const googleBooksId = book.googleBooksId || null;
+  const isbn13        = book.isbn13 || null;
+  const goodreadsId   = book.goodreadsId || null;
+  const creators      = book.creators || (book.author ? [book.author] : []);
+
+  // 1. Match by Google Books ID — covers the seeded catalog (240 books) AND
+  //    any prior user add that came through the search tool.
+  if (googleBooksId) {
+    const { data } = await supabase
+      .from("items")
+      .select("id")
+      .eq("source", "google_books")
+      .eq("source_id", googleBooksId)
+      .maybeSingle();
+    if (data?.id) return data.id;
+  }
+
+  // 2. Match by ISBN-13 — catches catalog rows seeded with an ISBN even if
+  //    the user search didn't return a googleBooksId for the same edition.
+  if (isbn13) {
+    const { data } = await supabase
+      .from("items")
+      .select("id")
+      .eq("external_ids->>isbn_13", isbn13)
+      .maybeSingle();
+    if (data?.id) return data.id;
+  }
+
+  // 3. Match by legacy Goodreads ID (Goodreads RSS import path).
   if (goodreadsId) {
     const { data } = await supabase
       .from("items")
       .select("id")
-      .eq("external_ids->>'goodreads_id'", String(goodreadsId))
+      .eq("external_ids->>goodreads_id", String(goodreadsId))
       .maybeSingle();
-    if (data?.id) {
-      // Update enrichment fields if we have fresh data
-      await supabase.from("items").update({
-        genres: payload.genres,
-        tags:   payload.tags,
-        cover_url: payload.cover_url || undefined,
-        enriched_at: book._enriched ? new Date().toISOString() : undefined,
-      }).eq("id", data.id);
-      return data.id;
-    }
+    if (data?.id) return data.id;
   }
 
-  // Upsert by title + creator (best effort dedup without external IDs)
-  const { data, error } = await supabase
+  // 4. No match — insert a new row.  Build external_ids from whatever we have.
+  const externalIds = {};
+  if (googleBooksId) externalIds.google_books_id = googleBooksId;
+  if (isbn13)        externalIds.isbn_13         = isbn13;
+  if (goodreadsId)   externalIds.goodreads_id    = String(goodreadsId);
+
+  const payload = {
+    category_id:        categoryId,
+    title:              book.title || "",
+    creators,
+    cover_url:          book.cover || book.cover_url || null,
+    description:        book.description || null,
+    genres:             book.categories || book.genres || [],
+    tags:               book.tags || [],
+    metadata:           book.metadata || {},
+    external_ids:       externalIds,
+    // RLS: non-admins MUST insert with created_by_user_id = auth.uid()
+    created_by_user_id: userId,
+    is_verified:        false,
+    // Set source so the next user adding the same Google-Books-sourced book
+    // dedups against this row via path #1 above instead of creating a third.
+    source:             googleBooksId ? "google_books" : null,
+    source_id:          googleBooksId || null,
+    data_sources:       book._enriched ? {
+      open_library: { fetched_at: new Date().toISOString(), fields: ["genres", "tags"] },
+    } : {},
+  };
+
+  const { data: inserted, error } = await supabase
     .from("items")
-    .upsert(payload, { onConflict: "external_ids->>'goodreads_id'" })
+    .insert(payload)
     .select("id")
     .single();
 
-  if (error || !data) {
-    // Fall back: insert without conflict resolution
-    const { data: inserted } = await supabase
-      .from("items")
-      .insert(payload)
-      .select("id")
-      .single();
-    return inserted?.id || null;
+  if (error) {
+    // Race condition: another tab inserted the same source_id between our
+    // check and our insert.  Refetch and return whichever row won.
+    if (error.code === "23505" && googleBooksId) {        // unique_violation
+      const { data: retry } = await supabase
+        .from("items")
+        .select("id")
+        .eq("source", "google_books")
+        .eq("source_id", googleBooksId)
+        .maybeSingle();
+      if (retry?.id) return retry.id;
+    }
+    console.error("ensureItem insert failed:", error.message);
+    return null;
   }
-  return data.id;
+  return inserted?.id || null;
 }
 
 // ─── Shelf data ───────────────────────────────────────────────────────────────
@@ -205,7 +260,7 @@ export async function saveShelfMonth(userId, categoryId, year, slot, books) {
     .eq("slot", slot);
 
   for (const book of books) {
-    const itemId = await ensureItem(book, categoryId);
+    const itemId = await ensureItem(book, categoryId, userId);
     if (!itemId) continue;
     await supabase.from("shelf_items").insert({
       user_id:     userId,
@@ -236,7 +291,7 @@ export async function saveSlotChampion(userId, categoryId, year, slot, book) {
     return;
   }
 
-  const itemId = await ensureItem(book, categoryId);
+  const itemId = await ensureItem(book, categoryId, userId);
   if (!itemId) return;
 
   await supabase.from("slot_champions").upsert({
@@ -265,7 +320,7 @@ export async function saveBracketPick(userId, categoryId, year, matchId, winnerB
     return;
   }
 
-  const itemId = await ensureItem(winnerBook, categoryId);
+  const itemId = await ensureItem(winnerBook, categoryId, userId);
   if (!itemId) return;
 
   await supabase.from("bracket_picks").upsert({
@@ -294,7 +349,7 @@ export async function saveSeasonChampion(userId, categoryId, year, book) {
     return;
   }
 
-  const itemId = await ensureItem(book, categoryId);
+  const itemId = await ensureItem(book, categoryId, userId);
   if (!itemId) return;
 
   await supabase.from("season_champions").upsert({
@@ -326,7 +381,7 @@ export async function syncShelfData(userId, categoryId, year, data) {
   const idMap = new Map(); // book.id (local) → item.id (uuid)
   await Promise.all(allBooks.map(async b => {
     if (!b || idMap.has(b.id)) return;
-    const uuid = await ensureItem(b, categoryId);
+    const uuid = await ensureItem(b, categoryId, userId);
     if (uuid) idMap.set(b.id, uuid);
   }));
 

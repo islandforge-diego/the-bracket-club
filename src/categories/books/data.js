@@ -305,7 +305,35 @@ export async function enrichBooks(books) {
   }));
 }
 
+// User-facing book search.  Hits the same /api/google-books proxy the admin
+// catalog tool uses so user adds carry stable IDs (googleBooksId, isbn13)
+// that ensureItem() can dedup against the verified seeded catalog.
+//
+// Falls back to Open Library if the proxy is unavailable (eg. dev without
+// GOOGLE_BOOKS_API_KEY) — those results lack googleBooksId so they'll be
+// inserted as fresh user-owned items, same as before.
 export async function searchBooks(query) {
+  // ── Primary: Google Books via our serverless proxy ────────────────────
+  try {
+    const res = await fetch(`/api/google-books?q=${encodeURIComponent(query)}&maxResults=8`);
+    if (res.ok) {
+      const data = await res.json();
+      return (data.items || []).map(b => ({
+        title:         b.title || "",
+        author:        (b.authors || [])[0] || "",
+        cover:         b.coverUrl || "",
+        // Pass-through IDs for catalog dedup in ensureItem()
+        googleBooksId: b.googleBooksId || null,
+        isbn13:        b.isbn13 || null,
+        // Pass-through metadata so the user's first add populates rich data
+        description:   b.description || null,
+        publishedDate: b.publishedDate || null,
+        genres:        b.genres || [],
+      }));
+    }
+  } catch { /* fall through to OL fallback */ }
+
+  // ── Fallback: Open Library (original behaviour, no IDs) ───────────────
   const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&fields=title,author_name,cover_i&limit=6`);
   const data = await res.json();
   return (data.docs || []).map(d => ({

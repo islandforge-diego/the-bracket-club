@@ -735,12 +735,25 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
   const addBook = (book) => {
     if (!book.title?.trim()) return;
-    const newBook = { id:Date.now(), title:book.title.trim(), author:(book.author||"").trim(), cover:(book.cover||"").trim(), rating:null };
+    const newBook = {
+      id:            Date.now(),
+      title:         book.title.trim(),
+      author:        (book.author || "").trim(),
+      cover:         (book.cover  || "").trim(),
+      // Pass-through IDs from the search result so ensureItem() can dedup
+      // against the verified catalog instead of creating a duplicate row.
+      googleBooksId: book.googleBooksId || null,
+      isbn13:        book.isbn13 || null,
+      description:   book.description || null,
+      publishedDate: book.publishedDate || null,
+      categories:    book.genres || [],
+      rating:        null,
+    };
     const nd = { ...data };
     nd.months = [...nd.months];
     nd.months[idx] = { ...m, books:[...m.books, newBook] };
     save(nd);
-    track(user?.id, EVENT.BOOK_ADDED, { slot: idx, source: "manual" });
+    track(user?.id, EVENT.BOOK_ADDED, { slot: idx, source: book.googleBooksId ? "google_books" : "manual" });
     setForm({ title:"", author:"", cover:"" });
     setShowManual(false);
   };

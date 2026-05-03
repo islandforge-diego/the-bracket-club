@@ -109,110 +109,88 @@ describe("db.js — graceful no-op without supabase or user", () => {
     expect(id).toBeNull();
   });
 
-  it("saveTrendingPrefs writes to localStorage even when no user", async () => {
-    supabaseModule.__setMock(null);
-    await db.saveTrendingPrefs(null, "books", {
-      personalizationEnabled: true,
-      preferences: { selectedCategories: ["fantasy"], selectedTags: [], excludedTags: [], discoveryMode: "balanced" },
-    });
-    const raw = JSON.parse(localStorage.getItem("bracket_club_trending_prefs"));
-    expect(raw.books.personalizationEnabled).toBe(true);
-    expect(raw.books.preferences.selectedCategories).toEqual(["fantasy"]);
-  });
 });
 
-// ─── ensureItem: catalog upsert ──────────────────────────────────────────────
+// ─── ensureItem: catalog dedup + insert ──────────────────────────────────────
 
 describe("db.js — ensureItem", () => {
-  it("includes creators array, external_ids, and data_sources in payload", async () => {
+  // Helper: install a Supabase mock where every chain returns "no existing row"
+  // for maybeSingle (so all dedup checks miss) and a fake UUID for insert.single.
+  const setupInsertMock = () => {
     const client = setupSupabase();
-    // Make insert chain return a fake item id
     client.from = vi.fn((table) => {
       const chain = supabaseModule.__makeChain(table);
       chain.single = vi.fn(() => Promise.resolve({ data: { id: "item-uuid" }, error: null }));
       chain.maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }));
       return chain;
     });
+    return client;
+  };
 
-    await db.ensureItem({
-      id: "gr-123",
-      title: "Dune",
-      author: "Frank Herbert",
-      cover: "http://cover",
-      description: "Sci-fi epic",
-      categories: ["sci_fi"],
-      tags: ["page_turners"],
-      _enriched: true,
+  it("short-circuits and returns the id directly when book.id is a UUID", async () => {
+    setupInsertMock();
+    const id = await db.ensureItem({
+      id: "11111111-2222-3333-4444-555555555555",
+      title: "Already in catalog",
     }, "books");
+    expect(id).toBe("11111111-2222-3333-4444-555555555555");
+    // No DB calls at all
+    expect(calls.find(c => c.table === "items")).toBeUndefined();
+  });
 
-    const upsertCall = calls.find(c => c.op === "upsert" && c.table === "items");
-    expect(upsertCall).toBeDefined();
-    expect(upsertCall.rows.creators).toEqual(["Frank Herbert"]);
-    expect(upsertCall.rows.external_ids).toEqual({ goodreads_id: "gr-123" });
-    expect(upsertCall.rows.genres).toEqual(["sci_fi"]);
-    expect(upsertCall.rows.data_sources.open_library).toBeDefined();
+  it("dedups by source/source_id when googleBooksId is present", async () => {
+    const client = setupSupabase();
+    client.from = vi.fn(() => {
+      const chain = supabaseModule.__makeChain("items");
+      // First call (the dedup lookup) returns an existing row
+      chain.maybeSingle = vi.fn(() => Promise.resolve({ data: { id: "existing-uuid" }, error: null }));
+      return chain;
+    });
+    const id = await db.ensureItem({
+      title: "Project Hail Mary",
+      author: "Andy Weir",
+      googleBooksId: "abc123",
+    }, "books");
+    expect(id).toBe("existing-uuid");
+    // No insert happened — we reused the catalog row
+    expect(calls.find(c => c.op === "insert" && c.table === "items")).toBeUndefined();
+  });
+
+  it("inserts a new row with creators[], external_ids, and source when no match found", async () => {
+    setupInsertMock();
+    await db.ensureItem({
+      title: "Some Indie Book",
+      author: "Unknown Author",
+      googleBooksId: "newId789",
+      isbn13: "9781234567890",
+    }, "books", "user-uuid-here");
+
+    const insert = calls.find(c => c.op === "insert" && c.table === "items");
+    expect(insert).toBeDefined();
+    expect(insert.rows.creators).toEqual(["Unknown Author"]);
+    expect(insert.rows.external_ids.google_books_id).toBe("newId789");
+    expect(insert.rows.external_ids.isbn_13).toBe("9781234567890");
+    expect(insert.rows.source).toBe("google_books");
+    expect(insert.rows.source_id).toBe("newId789");
+    expect(insert.rows.created_by_user_id).toBe("user-uuid-here");
+    expect(insert.rows.is_verified).toBe(false);
   });
 
   it("preserves an existing creators[] array when present", async () => {
-    const client = setupSupabase();
-    client.from = vi.fn((table) => {
-      const chain = supabaseModule.__makeChain(table);
-      chain.single = vi.fn(() => Promise.resolve({ data: { id: "item-uuid" }, error: null }));
-      chain.maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }));
-      return chain;
-    });
-
+    setupInsertMock();
     await db.ensureItem({
       title: "Good Omens",
       creators: ["Neil Gaiman", "Terry Pratchett"],
     }, "books");
-
-    const upsertCall = calls.find(c => c.op === "upsert" && c.table === "items");
-    expect(upsertCall.rows.creators).toEqual(["Neil Gaiman", "Terry Pratchett"]);
+    const insert = calls.find(c => c.op === "insert" && c.table === "items");
+    expect(insert.rows.creators).toEqual(["Neil Gaiman", "Terry Pratchett"]);
   });
 
   it("does not write data_sources when book is not _enriched", async () => {
-    const client = setupSupabase();
-    client.from = vi.fn((table) => {
-      const chain = supabaseModule.__makeChain(table);
-      chain.single = vi.fn(() => Promise.resolve({ data: { id: "item-uuid" }, error: null }));
-      chain.maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }));
-      return chain;
-    });
-
+    setupInsertMock();
     await db.ensureItem({ title: "X", author: "Y" }, "books");
-    const upsertCall = calls.find(c => c.op === "upsert" && c.table === "items");
-    expect(upsertCall.rows.data_sources).toEqual({});
-  });
-});
-
-// ─── Trending preferences ────────────────────────────────────────────────────
-
-describe("db.js — saveTrendingPrefs", () => {
-  it("upserts to trending_preferences and writes localStorage", async () => {
-    const client = setupSupabase();
-    await db.saveTrendingPrefs("user-1", "books", {
-      personalizationEnabled: true,
-      preferences: {
-        selectedCategories: ["fantasy", "sci_fi"],
-        selectedTags: ["page_turners"],
-        excludedTags: ["romance_heavy"],
-        discoveryMode: "taste_first",
-      },
-    });
-
-    // localStorage write happened
-    const raw = JSON.parse(localStorage.getItem("bracket_club_trending_prefs"));
-    expect(raw.books.personalizationEnabled).toBe(true);
-
-    // Supabase upsert happened with snake_case columns
-    const upsert = calls.find(c => c.op === "upsert" && c.table === "trending_preferences");
-    expect(upsert).toBeDefined();
-    expect(upsert.rows.user_id).toBe("user-1");
-    expect(upsert.rows.category_id).toBe("books");
-    expect(upsert.rows.personalization_enabled).toBe(true);
-    expect(upsert.rows.selected_categories).toEqual(["fantasy", "sci_fi"]);
-    expect(upsert.rows.discovery_mode).toBe("taste_first");
+    const insert = calls.find(c => c.op === "insert" && c.table === "items");
+    expect(insert.rows.data_sources).toEqual({});
   });
 });
 

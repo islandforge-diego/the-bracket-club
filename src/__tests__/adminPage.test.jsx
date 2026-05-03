@@ -24,6 +24,10 @@ vi.mock("../lib/AuthContext.jsx", () => ({
 vi.mock("../lib/db.js", () => ({
   loadAdminUserSummary:   (...args) => loadAdminUserSummary(...args),
   loadAdminPlatformStats: (...args) => loadAdminPlatformStats(...args),
+  // Stubs for the AdminBookSearch section so AdminPage mounts cleanly.
+  getNewReleases:         () => Promise.resolve([]),
+  upsertVerifiedItem:     () => Promise.resolve(null),
+  removeVerifiedItem:     () => Promise.resolve(),
 }));
 
 import AdminPage from "../lib/AdminPage.jsx";
