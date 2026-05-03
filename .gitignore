@@ -5,3 +5,4 @@ dist
 *.csv
 *.mjs.timestamp-*
 .claude/
+.env.local
