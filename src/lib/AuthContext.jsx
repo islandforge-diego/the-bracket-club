@@ -85,7 +85,7 @@ export function AuthProvider({ children }) {
     if (marketingConsent) localStorage.setItem("pending_marketing_consent", "1");
     return supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: process.env.NODE_ENV === "production" ? "https://the-bracket-club.vercel.app" : window.location.origin },
     });
   }, []);
 
