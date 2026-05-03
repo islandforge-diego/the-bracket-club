@@ -196,6 +196,13 @@ export default function App() {
   const [showShare, setShowShare] = useState(false);
   const [ob, setOb] = useState(getOnboarding);
   const [tourActive, setTourActive] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => window.innerWidth > 768);
+
+  useEffect(() => {
+    const fn = () => setIsDesktop(window.innerWidth > 768);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
 
   const markOb = (updates) => setOb(setOnboarding(updates));
 
@@ -321,6 +328,56 @@ export default function App() {
     );
   }
 
+  if (isDesktop) return (
+    <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"system-ui,-apple-system,sans-serif", background:"#f0fdf4" }}>
+      {/* ── Desktop sticky header/navbar ── */}
+      <div style={{ background:"#14532d", color:"#fff", padding:"0 32px", height:64, display:"flex", alignItems:"center", gap:0, flexShrink:0, boxShadow:"0 2px 8px #0002", position:"sticky", top:0, zIndex:100 }}>
+        <img src="/logo.png" alt="Bracket Club" style={{ height:40, width:40, objectFit:"contain", marginRight:14 }} />
+        <span style={{ fontWeight:800, fontSize:18, letterSpacing:-0.5, marginRight:32 }}>The Bracket Club</span>
+        <div style={{ display:"flex", gap:4 }}>
+          {NAV.map(({ v, icon, lbl }) => (
+            <button key={v} onClick={() => { setBattleId(null); setView(v); }} style={{
+              padding:"8px 18px", border:"none", borderRadius:8, cursor:"pointer",
+              background: view===v ? "rgba(255,255,255,0.18)" : "transparent",
+              color:"#fff", fontWeight: view===v ? 700 : 500, fontSize:14,
+              display:"flex", alignItems:"center", gap:7,
+            }}>
+              <span style={{ fontSize:16 }}>{icon}</span>{lbl}
+            </button>
+          ))}
+        </div>
+        <div style={{ flex:1 }} />
+        {/* AccountButton from CategoryRouter renders here via position:fixed top:14 right:16 */}
+      </div>
+
+      {/* ── Desktop content area ── */}
+      <div style={{ flex:1, overflowY:"auto", padding:"32px 40px" }}>
+        {view === "import" ? (
+          <div style={{ maxWidth:700, margin:"0 auto" }}>
+            <Import data={data} save={save} onDone={() => setView("home")} year={year} />
+          </div>
+        ) : view === "home" ? (
+          <Home data={data} save={save} curM={curM} year={year} setYear={setYear}
+            goBracket={() => setView("bracket")} goImport={() => setView("import")}
+            openShare={() => setShowShare(true)} ob={ob} markOb={markOb} isDesktop />
+        ) : view === "popular" ? (
+          <NewReleases year={year} isDesktop />
+        ) : (
+          <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
+            year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+        )}
+      </div>
+
+      {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
+      {!ob.hasSeenWelcome && !loading && (
+        <Welcome config={CAT}
+          onStartTour={() => { markOb({ hasSeenWelcome: true }); setView("home"); setTourActive(true); }}
+          onSkip={() => markOb({ hasSeenWelcome: true })} />
+      )}
+      {tourActive && <Tour config={CAT} setView={setView} onDone={() => setTourActive(false)} />}
+    </div>
+  );
+
   return (
     <div style={{ height:"100dvh", maxHeight:812, background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 0 0 1px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10)" }}>
       {/* Header */}
@@ -380,7 +437,7 @@ export default function App() {
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
-function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare, ob, markOb }) {
+function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare, ob, markOb, isDesktop = false }) {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const thisYear = new Date().getFullYear();
   const picks      = data.months.map(m => m.winner);
@@ -397,10 +454,10 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
   }
 
   return (
-    <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
+    <div style={{ padding: isDesktop ? 0 : "4px 12px", display:"flex", flexDirection:"column", gap: isDesktop ? 20 : 6, height: isDesktop ? "auto" : "100%", boxSizing:"border-box", maxWidth: isDesktop ? 1100 : "none", margin: isDesktop ? "0 auto" : undefined, width:"100%" }}>
 
       {/* ── Year Reads grid ── */}
-      <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
+      <div style={{ background:"#fff", borderRadius:16, padding: isDesktop ? "20px 24px" : "6px 10px", boxShadow:"0 1px 4px #0001", flex: isDesktop ? "none" : 1, display:"flex", flexDirection:"column" }}>
         <div data-tour="year-nav" style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
           <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
           <div style={{ textAlign:"center" }}>
@@ -409,7 +466,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
           </div>
           <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
         </div>
-        <div data-tour="home-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
+        <div data-tour="home-grid" style={{ display:"grid", gridTemplateColumns:`repeat(${isDesktop ? 4 : 3},1fr)`, gap: isDesktop ? 16 : 6, flex: isDesktop ? "none" : 1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
             const hasBooksButNoPick = !pick && (data.months[i].books?.length > 0);
@@ -417,12 +474,12 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
               <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
                 <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
                 {pick ? (
-                  <div style={{ position:"relative", flex:1, display:"flex" }}>
+                  <div style={{ position:"relative", flex: isDesktop ? "none" : 1, display:"flex", justifyContent:"center" }}>
                     <Cover book={pick} size="md" />
                     <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
                   </div>
                 ) : (
-                  <div style={{ flex:1, width:56, borderRadius:6, background: hasBooksButNoPick?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooksButNoPick?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
+                  <div style={{ flex: isDesktop ? "none" : 1, height: isDesktop ? 120 : undefined, width: isDesktop ? "100%" : 56, borderRadius:6, background: hasBooksButNoPick?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooksButNoPick?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
                     {hasBooksButNoPick ? <span style={{ fontSize:12 }}>📚</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
                   </div>
                 )}
@@ -1157,7 +1214,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 }
 
 // ─── New Releases ─────────────────────────────────────────────────────────────
-function NewReleases({ year }) {
+function NewReleases({ year, isDesktop = false }) {
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1203,7 +1260,7 @@ function NewReleases({ year }) {
   return (
     <>
       {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
-      <div style={{ padding:"12px", display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={{ padding: isDesktop ? 0 : "12px", display:"flex", flexDirection:"column", gap:16, maxWidth: isDesktop ? 1100 : "none", margin: isDesktop ? "0 auto" : undefined, width:"100%" }}>
 
         <div style={{ textAlign:"center" }}>
           <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>📖 New Releases</div>
@@ -1220,7 +1277,7 @@ function NewReleases({ year }) {
               <div style={{ fontSize:11, fontWeight:800, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, marginBottom:8 }}>
                 {label}
               </div>
-              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <div style={{ display: isDesktop ? "grid" : "flex", gridTemplateColumns: isDesktop ? "repeat(3, 1fr)" : undefined, flexDirection: isDesktop ? undefined : "column", gap: isDesktop ? 16 : 8 }}>
                 {groupBooks.map(book => {
                   const cs = isComingSoon(book);
                   const title = book.title ?? "Unknown Title";
@@ -1231,11 +1288,11 @@ function NewReleases({ year }) {
                   return (
                     <div key={book.id}
                       onClick={() => setDetailBook({ title, author: creators[0] ?? "", cover: coverUrl })}
-                      style={{ display:"flex", gap:12, background:"#fff", borderRadius:14, padding:"12px", border:"1px solid #e5e7eb", cursor:"pointer" }}>
+                      style={{ display:"flex", gap:12, background:"#fff", borderRadius:14, padding: isDesktop ? "16px" : "12px", border:"1px solid #e5e7eb", cursor:"pointer", flexDirection: isDesktop ? "column" : "row", alignItems: isDesktop ? "flex-start" : "flex-start" }}>
                       {coverUrl ? (
-                        <img src={coverUrl} alt={title} style={{ width:56, height:80, objectFit:"cover", borderRadius:6, flexShrink:0 }} />
+                        <img src={coverUrl} alt={title} style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, objectFit:"cover", borderRadius:6, flexShrink:0 }} />
                       ) : (
-                        <div style={{ width:56, height:80, borderRadius:6, background:"#f5f5f4", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>📚</div>
+                        <div style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, borderRadius:6, background:"#f5f5f4", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>📚</div>
                       )}
                       <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:4 }}>
                         <div style={{ fontWeight:700, fontSize:14, color:"#1c1917", lineHeight:1.3 }}>{title}</div>

@@ -25,6 +25,7 @@ function AccountButton() {
   const { user, loading, signOut, isAdmin } = useAuth();
   const [showLogin, setShowLogin]  = useState(false);
   const [showMenu,  setShowMenu]   = useState(false);
+  const isDesktop = typeof window !== 'undefined' && window.innerWidth > 768;
 
   if (loading) return null;
 
@@ -34,7 +35,8 @@ function AccountButton() {
         onClick={() => setShowLogin(true)}
         style={{
           position: "fixed", top: 14, right: 16, zIndex: 200,
-          background: "#1e293b", color: "#fff", border: "none",
+          background: isDesktop ? "rgba(255,255,255,0.18)" : "#1e293b",
+          color: "#fff", border: isDesktop ? "1px solid rgba(255,255,255,0.3)" : "none",
           borderRadius: 20, padding: "6px 14px", fontSize: 13,
           fontWeight: 600, cursor: "pointer",
         }}
