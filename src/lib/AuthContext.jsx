@@ -85,7 +85,10 @@ export function AuthProvider({ children }) {
     if (marketingConsent) localStorage.setItem("pending_marketing_consent", "1");
     return supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      // Redirect directly to /books — going to "/" would trigger react-router's
+      // <Navigate to="/books"> which strips the ?code=… query before Supabase
+      // can exchange it for a session.
+      options: { redirectTo: window.location.origin + "/books" },
     });
   }, []);
 

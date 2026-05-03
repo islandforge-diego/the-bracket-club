@@ -12,7 +12,14 @@
  */
 
 import { useState } from "react";
-import { Routes, Route, Navigate, Link } from "react-router-dom";
+import { Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
+
+// Like <Navigate to={to}> but preserves the current ?search and #hash so
+// that OAuth callbacks (?code=…) and other query params survive the redirect.
+function NavigateWithQuery({ to }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: to, search, hash }} replace />;
+}
 import BooksApp from "./App.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import LoginModal from "./lib/LoginModal.jsx";
@@ -116,7 +123,7 @@ export default function CategoryRouter() {
     <AccountButton />
     <Routes>
       {/* Redirect bare root to the books category for now */}
-      <Route path="/" element={<Navigate to="/books" replace />} />
+      <Route path="/" element={<NavigateWithQuery to="/books" />} />
 
       {/* Books category — the current app */}
       <Route path="/books/*" element={<BooksApp />} />
@@ -130,7 +137,7 @@ export default function CategoryRouter() {
       */}
 
       {/* Fallback for any unknown path */}
-      <Route path="*" element={<Navigate to="/books" replace />} />
+      <Route path="*" element={<NavigateWithQuery to="/books" />} />
     </Routes>
     </>
   );
