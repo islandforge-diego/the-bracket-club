@@ -10,6 +10,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { supabase } from "./supabase.js";
+import { track, EVENT } from "./events.js";
 
 const AuthContext = createContext(null);
 
@@ -48,6 +49,8 @@ export function AuthProvider({ children }) {
       refreshAdmin(s?.user?.id);
 
       if (event === "SIGNED_IN" && s?.user) {
+        track(s.user.id, EVENT.SIGN_IN);
+
         const pending = localStorage.getItem("pending_marketing_consent");
         if (pending === "1") {
           await supabase.from("profiles").update({

@@ -36,6 +36,7 @@ import TrendingOnboarding, { TrendingBanner, TrendingControlsSheet } from "./sha
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase } from "./lib/db.js";
+import { track, EVENT } from "./lib/events.js";
 
 const CAT = getCategoryConfig();
 const CATEGORY_ID = "books";
@@ -489,6 +490,7 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
 
 // ─── Goodreads Import View ────────────────────────────────────────────────────
 function Import({ data, save, onDone, year }) {
+  const { user } = useAuth();
   const [books,    setBooks]    = useState(null);
   const [selected, setSelected] = useState({});
   const [status,   setStatus]   = useState("");
@@ -541,6 +543,7 @@ function Import({ data, save, onDone, year }) {
 
   const confirmImport = () => {
     const nd = { ...data, months: data.months.map(m => ({ ...m, books: [...m.books] })) };
+    let added = 0;
     books.forEach((book, i) => {
       if (!selected[i]) return;
       const already = nd.months[book.month].books.some(b => b.title.toLowerCase() === book.title.toLowerCase());
@@ -552,8 +555,10 @@ function Import({ data, save, onDone, year }) {
         cover:  book.cover || "",
         rating: book.rating,
       });
+      added++;
     });
     save(nd);
+    if (added > 0) track(user?.id, EVENT.BOOK_ADDED, { count: added, source: "import", year });
     onDone();
   };
 
@@ -655,6 +660,7 @@ function Import({ data, save, onDone, year }) {
 
 // ─── Month ────────────────────────────────────────────────────────────────────
 function Month({ data, save, idx, setIdx, onBack }) {
+  const { user } = useAuth();
   const [showManual,   setShowManual]   = useState(false);
   const [form,         setForm]         = useState({ title:"", author:"", cover:"" });
   const [monthBattle,  setMonthBattle]  = useState(null);
@@ -690,6 +696,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
     nd.months = [...nd.months];
     nd.months[idx] = { ...m, books:[...m.books, newBook] };
     save(nd);
+    track(user?.id, EVENT.BOOK_ADDED, { slot: idx, source: "manual" });
     setForm({ title:"", author:"", cover:"" });
     setShowManual(false);
   };
@@ -704,6 +711,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
       winner: m.winner?.id === id ? null : m.winner,
     };
     save(nd);
+    track(user?.id, EVENT.BOOK_REMOVED, { slot: idx });
   };
 
   const starBook = (book) => {
@@ -712,6 +720,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
     const alreadyStarred = m.winner?.id === book.id;
     nd.months[idx] = { ...m, winner: alreadyStarred ? null : book };
     save(nd);
+    if (!alreadyStarred) track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "star" });
   };
 
   const monthVote = (matchId, book) => {
@@ -726,9 +735,11 @@ function Month({ data, save, idx, setIdx, onBack }) {
       const champion = getBracketWinner(finalMatch.id, bracket.rounds, newPicks);
       if (champion && newPicks[finalMatch.id]) {
         nd.months[idx].winner = champion;
+        track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "bracket" });
       }
     }
     save(nd);
+    track(user?.id, EVENT.BRACKET_PICK, { type: "slot", slot: idx, match_id: matchId });
     setMonthBattle(null);
   };
 
@@ -1641,6 +1652,7 @@ function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattl
 
 // ─── Bracket ──────────────────────────────────────────────────────────────────
 function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, label }) {
+  const { user } = useAuth();
   const months = data.months;
   const b      = data.bracket || {};
   const [top3Pick, setTop3Pick] = useState(false);
@@ -1648,6 +1660,10 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   const vote = (matchId, book) => {
     const nd = { ...data, bracket:{ ...data.bracket, [matchId]:book } };
     save(nd);
+    track(user?.id, EVENT.BRACKET_PICK, { type: "annual", match_id: matchId, year });
+    if (matchId === "final") {
+      track(user?.id, EVENT.SEASON_CHAMPION, { year });
+    }
     setBattleId(null);
   };
 

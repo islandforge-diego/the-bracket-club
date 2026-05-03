@@ -58,6 +58,8 @@ function mockSupabase() {
           profileUpdates.push({ table, data });
           return chain;
         }),
+        // events.track() inserts into "events" — needs to no-op cleanly
+        insert: vi.fn(() => ({ then: (resolve) => resolve({ error: null }) })),
         eq: vi.fn(() => chain),
         then: (resolve) => resolve({ error: null }),
       };
