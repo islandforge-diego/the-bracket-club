@@ -15,7 +15,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "./AuthContext.jsx";
-import { loadAdminUserSummary, loadAdminPlatformStats } from "./db.js";
+import { loadAdminUserSummary, loadAdminPlatformStats, getNewReleases, upsertVerifiedItem, removeVerifiedItem } from "./db.js";
 
 const card = {
   background: "#fff",
@@ -140,6 +140,187 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        {/* New Releases catalog management */}
+        <AdminBookSearch />
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Book Search ────────────────────────────────────────────────────────
+function AdminBookSearch() {
+  const [query,      setQuery]      = useState("");
+  const [results,    setResults]    = useState([]);
+  const [searching,  setSearching]  = useState(false);
+  const [searchErr,  setSearchErr]  = useState("");
+  const [catalog,    setCatalog]    = useState([]);
+  const [catLoading, setCatLoading] = useState(true);
+  const [addingId,   setAddingId]   = useState(null);
+  const [removingId, setRemovingId] = useState(null);
+  const [message,    setMessage]    = useState("");
+
+  const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const loadCatalog = () => {
+    setCatLoading(true);
+    getNewReleases().then(data => { setCatalog(data); setCatLoading(false); });
+  };
+  useEffect(() => { loadCatalog(); }, []);
+
+  const search = async (e) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true); setSearchErr(""); setResults([]);
+    try {
+      const res  = await fetch(`/api/google-books?q=${encodeURIComponent(query)}&maxResults=10`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      setResults(data.items || []);
+    } catch (err) {
+      setSearchErr(err.message);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const flash = (msg) => { setMessage(msg); setTimeout(() => setMessage(""), 3500); };
+
+  const addBook = async (book) => {
+    setAddingId(book.googleBooksId);
+    try {
+      await upsertVerifiedItem(book, "books");
+      flash(`✓ "${book.title}" added to catalog`);
+      loadCatalog();
+    } catch (err) {
+      flash(`✗ Failed: ${err.message}`);
+    } finally {
+      setAddingId(null);
+    }
+  };
+
+  const removeBook = async (item) => {
+    if (!confirm(`Remove "${item.title}" from the catalog?`)) return;
+    setRemovingId(item.id);
+    try {
+      await removeVerifiedItem(item.id);
+      flash(`✓ "${item.title}" removed`);
+      loadCatalog();
+    } catch (err) {
+      flash(`✗ Failed: ${err.message}`);
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  const ok = message.startsWith("✓");
+
+  return (
+    <div style={{ marginTop: 32 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 16px" }}>📖 New Releases Catalog</h2>
+
+      {/* Search bar */}
+      <form onSubmit={search} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder='Search Google Books (e.g. "Intermezzo Sally Rooney")'
+          style={{ flex: 1, padding: "10px 14px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14, outline: "none" }}
+        />
+        <button type="submit" disabled={searching}
+          style={{ padding: "10px 20px", background: "#14532d", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: searching ? "default" : "pointer" }}>
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </form>
+
+      {searchErr && <div style={{ color: "#dc2626", fontSize: 13, marginBottom: 10 }}>{searchErr}</div>}
+      {message && (
+        <div style={{ padding: "8px 14px", background: ok ? "#f0fdf4" : "#fef2f2", color: ok ? "#166534" : "#dc2626", borderRadius: 8, fontSize: 13, marginBottom: 12, fontWeight: 600 }}>
+          {message}
+        </div>
+      )}
+
+      {/* Search results */}
+      {results.length > 0 && (
+        <div style={{ ...card, marginBottom: 24 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Results</div>
+          {results.map(book => (
+            <div key={book.googleBooksId} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0", borderTop: "1px solid #f1f5f9" }}>
+              {book.coverUrl
+                ? <img src={book.coverUrl} alt={book.title} style={{ width: 44, height: 62, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} />
+                : <div style={{ width: 44, height: 62, background: "#f5f5f4", borderRadius: 4, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📚</div>
+              }
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{book.title}</div>
+                {book.authors.length > 0 && <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{book.authors.join(", ")}</div>}
+                {book.publishedDate && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>{book.publishedDate}</div>}
+                {book.genres.length > 0 && <div style={{ fontSize: 11, color: "#6366f1", marginTop: 3 }}>{book.genres.slice(0, 2).join(" · ")}</div>}
+              </div>
+              <button
+                onClick={() => addBook(book)}
+                disabled={addingId === book.googleBooksId}
+                style={{ padding: "6px 14px", background: "#14532d", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: addingId === book.googleBooksId ? "default" : "pointer", flexShrink: 0 }}>
+                {addingId === book.googleBooksId ? "Adding…" : "+ Add"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Catalog table */}
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9", fontWeight: 600, fontSize: 14 }}>
+          Catalog <span style={{ color: "#94a3b8", fontWeight: 400 }}>({catalog.length} books)</span>
+        </div>
+        {catLoading ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>Loading…</div>
+        ) : catalog.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No books yet — search above to add some.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                  <Th></Th>
+                  <Th>Title</Th>
+                  <Th>Author(s)</Th>
+                  <Th>Release</Th>
+                  <Th>Genres</Th>
+                  <Th></Th>
+                </tr>
+              </thead>
+              <tbody>
+                {catalog.map(item => {
+                  const creators   = Array.isArray(item.creators) ? item.creators : [];
+                  const genres     = Array.isArray(item.genres)   ? item.genres   : [];
+                  const cover      = item.cover_url ?? item.metadata?.coverUrl ?? "";
+                  const release    = item.published_month != null
+                    ? `${MONTH_ABBR[item.published_month - 1]} ${item.published_year}`
+                    : item.published_year ?? "—";
+                  return (
+                    <tr key={item.id} style={{ borderTop: "1px solid #f1f5f9" }}>
+                      <Td>
+                        {cover
+                          ? <img src={cover} alt="" style={{ width: 30, height: 43, objectFit: "cover", borderRadius: 3 }} />
+                          : "—"}
+                      </Td>
+                      <Td><span style={{ fontWeight: 600 }}>{item.title}</span></Td>
+                      <Td>{creators.join(", ") || "—"}</Td>
+                      <Td>{release}</Td>
+                      <Td>{genres.slice(0, 2).join(", ") || "—"}</Td>
+                      <Td>
+                        <button onClick={() => removeBook(item)} disabled={removingId === item.id}
+                          style={{ padding: "4px 10px", background: "#fff", border: "1px solid #fecaca", color: "#dc2626", borderRadius: 6, fontSize: 12, cursor: removingId === item.id ? "default" : "pointer", fontWeight: 600 }}>
+                          {removingId === item.id ? "…" : "Remove"}
+                        </button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

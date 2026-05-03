@@ -4,14 +4,11 @@
  * Rendered at /books by CategoryRouter. Owns all state for one year of data and
  * hands slices down to the three main views via a tab-based layout:
  *
- *   📚 My Shelf  (Month component)   — personal reading log, monthly bracket voting
- *   🔥 Trending  (Popular component) — Goodreads trending, personalized via prefs
- *   🏆 Bracket   (BracketHub)        — year-end tournament across monthly winners
+ *   📚 Home          (Home/Month component) — personal reading log, monthly bracket voting
+ *   📖 New Releases  (NewReleases component) — admin-curated catalog by release date
+ *   🏆 Bracket       (BracketHub)           — year-end tournament across monthly winners
  *
- * State lives in localStorage via createStore() (storage.js). When a backend is
- * added, only the load/save calls in the root useEffect need to change — all
- * child components already receive data as props and call save() callbacks.
- *
+ * State lives in localStorage via createStore() (storage.js) with Supabase sync.
  * The three-panel slide animation is driven by a CSS translateX on a wrapper div.
  * All overlay components (sheets, modals) use createPortal(…, document.body) to
  * escape the transform stacking context, which would otherwise break position:fixed.
@@ -22,32 +19,28 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─── Shared modules ──────────────────────────────────────────────────────────
 import { MONTHS, FULL, COLORS, R1, R2, MATCHES } from "./shared/constants.js";
 import { buildBracket, getBracketWinner, isMatchEmpty, getR1Winner, getMatchItems } from "./shared/bracket.js";
-import { createStore, freshData, freshTrendingData, migrateStorage } from "./shared/storage.js";
+import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
 import ItemSearch from "./shared/ItemSearch.jsx";
 import { getCategoryConfig } from "./shared/categoryConfig.js";
 import { getOnboarding, setOnboarding } from "./shared/onboarding.js";
-import { getTrendingPrefs, setTrendingPrefs, resetTrendingPrefs } from "./shared/trendingPreferences.js";
-import { rankTrending } from "./shared/rankTrending.js";
 import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
-import TrendingOnboarding, { TrendingBanner, TrendingControlsSheet } from "./shared/TrendingOnboarding.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
-import { loadShelf, syncShelfData, migrateLocalStorageToSupabase } from "./lib/db.js";
+import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getNewReleases } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
 
 const CAT = getCategoryConfig();
 const CATEGORY_ID = "books";
 
 // ─── Book-specific modules ──────────────────────────────────────────────────
-import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, fetchTrendingBooks, fetchGenreTrending, enrichBooks, searchBooks } from "./categories/books/data.js";
+import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, searchBooks } from "./categories/books/data.js";
 import { generateMonthlyCard, generateTop3Card, generateBOTYCard } from "./categories/books/share.js";
 
 // ─── Book storage instances ─────────────────────────────────────────────────
 const store = createStore("botb_");
-const trendingStore = createStore("botb_pop_");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function getBooks(match, months, bracket) {
@@ -196,7 +189,6 @@ function ShareOverlay({ data, year, onClose }) {
 export default function App() {
   const { user } = useAuth();
   const [data,     setData]     = useState(null);
-  const [trendingData,  setTrendingData]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [view,     setView]     = useState("home");
   const [battleId, setBattleId] = useState(null);
@@ -220,7 +212,6 @@ export default function App() {
         const remote = await loadShelf(user.id, CATEGORY_ID, year);
         setData(remote);
         store.set(year, remote); // refresh cache
-        setTrendingData(trendingStore.get(year) || freshTrendingData());
         setLoading(false);
         return;
       }
@@ -228,7 +219,6 @@ export default function App() {
       const existing = store.get(year);
       if (existing) {
         setData(existing);
-        setTrendingData(trendingStore.get(year) || freshTrendingData());
         setLoading(false);
         return;
       }
@@ -260,7 +250,6 @@ export default function App() {
       } catch {
         setData(freshData());
       }
-      setTrendingData(trendingStore.get(year) || freshTrendingData());
       setLoading(false);
     })();
   }, [user?.id]);
@@ -275,7 +264,6 @@ export default function App() {
       } else {
         setData(store.get(year) || freshData());
       }
-      setTrendingData(trendingStore.get(year) || freshTrendingData());
       setBattleId(null);
     }
   }, [year]);
@@ -297,12 +285,11 @@ export default function App() {
     store.set(year, nd);
     queueSync(nd);
   };
-  const saveTrending = (nd) => { setTrendingData({ ...nd }); trendingStore.set(year, nd); };
 
   const NAV = [
-    { v:"home",    icon:"🏠", lbl:"Home"    },
-    { v:"popular", icon:"🔥", lbl:"Trending" },
-    { v:"bracket", icon:"🏆", lbl:"Bracket" },
+    { v:"home",    icon:"🏠", lbl:"Home"       },
+    { v:"popular", icon:"📖", lbl:"New Releases" },
+    { v:"bracket", icon:"🏆", lbl:"Bracket"    },
   ];
 
   const VIEWS = ["home", "popular", "bracket"];
@@ -353,10 +340,10 @@ export default function App() {
               <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Popular trendingData={trendingData || freshTrendingData()} saveTrending={saveTrending} year={year} setYear={setYear} ob={ob} markOb={markOb} />
+              <NewReleases year={year} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <BracketHub data={data} trendingData={trendingData || freshTrendingData()} save={save} saveTrending={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+              <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
           </div>
         </div>
@@ -1169,453 +1156,127 @@ function Month({ data, save, idx, setIdx, onBack }) {
   );
 }
 
-// ─── Popular (Trending Grid) ────────────────────────────────────────────────
-function Popular({ trendingData, saveTrending, year, setYear, ob, markOb }) {
-  const [selectedMonth, setSelectedMonth] = useState(null);
-  const [trendingPrefs, setTrendingPrefs_] = useState(() => getTrendingPrefs(CAT.id));
-  const [showControls, setShowControls] = useState(false);
-  const [editingPrefs, setEditingPrefs] = useState(false);
+// ─── New Releases ─────────────────────────────────────────────────────────────
+function NewReleases({ year }) {
+  const [books, setBooks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [detailBook, setDetailBook] = useState(null);
 
-  const thisYear = new Date().getFullYear();
-  const picks = trendingData.months.map(m => m.winner);
-  const count = picks.filter(Boolean).length;
+  const today = new Date();
+  const MONTH_NAMES = ["January","February","March","April","May","June",
+                       "July","August","September","October","November","December"];
 
-  const showOnboarding = !trendingPrefs.onboardingCompleted || editingPrefs;
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    getNewReleases()
+      .then(data => { setBooks(data); setLoading(false); })
+      .catch(() => { setError("Couldn't load new releases"); setLoading(false); });
+  }, []);
 
-  const savePrefs = (updates) => {
-    const next = setTrendingPrefs(CAT.id, updates);
-    setTrendingPrefs_(next);
-    return next;
-  };
+  // Group books by "Month Year" label, preserving server order (published_at DESC)
+  const grouped = [];
+  const seen = new Set();
+  books.forEach(book => {
+    const label = book.published_month != null && book.published_year != null
+      ? `${MONTH_NAMES[book.published_month - 1]} ${book.published_year}`
+      : book.published_year != null ? String(book.published_year) : "Unknown";
+    if (!seen.has(label)) { seen.add(label); grouped.push({ label, books: [] }); }
+    grouped.find(g => g.label === label).books.push(book);
+  });
 
-  const handleComplete = ({ personalizationEnabled, preferences }) => {
-    savePrefs({ onboardingCompleted: true, personalizationEnabled, preferences, externalSource: CAT.source });
-    markOb({ hasViewedTrending: true });
-    setEditingPrefs(false);
-  };
+  const isComingSoon = (book) => book.published_at ? new Date(book.published_at) > today : false;
 
-  const handleSkip = () => {
-    savePrefs({ onboardingCompleted: true, personalizationEnabled: false });
-    markOb({ hasViewedTrending: true });
-    setEditingPrefs(false);
-  };
+  if (loading) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100%", color:"#9ca3af", fontSize:14 }}>
+      📖 Loading...
+    </div>
+  );
 
-  const handleReset = () => {
-    const next = resetTrendingPrefs(CAT.id);
-    setTrendingPrefs_(next);
-    setShowControls(false);
-  };
-
-  const handleRefresh = () => {
-    const cleared = { ...trendingData, months: trendingData.months.map(m => ({ ...m, books: [] })) };
-    saveTrending(cleared);
-    savePrefs({ resultsLastRefreshedAt: Date.now() });
-    setShowControls(false);
-  };
-
-  if (selectedMonth !== null) {
-    return <TrendingMonth trendingData={trendingData} saveTrending={saveTrending} year={year} idx={selectedMonth} setIdx={setSelectedMonth} onBack={() => setSelectedMonth(null)} trendingPrefs={trendingPrefs} />;
-  }
+  if (error) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100%", color:"#dc2626", fontSize:13 }}>
+      {error}
+    </div>
+  );
 
   return (
     <>
-      {/* Trending onboarding / preferences modal */}
-      {showOnboarding && (
-        <TrendingOnboarding
-          config={CAT}
-          editMode={editingPrefs}
-          initialPreferences={editingPrefs ? trendingPrefs.preferences : undefined}
-          onComplete={handleComplete}
-          onSkip={handleSkip}
-        />
-      )}
+      {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
+      <div style={{ padding:"12px", display:"flex", flexDirection:"column", gap:16 }}>
 
-      {/* Controls sheet */}
-      {showControls && (
-        <TrendingControlsSheet
-          prefs={trendingPrefs}
-          onEdit={() => { setEditingPrefs(true); setShowControls(false); }}
-          onReset={handleReset}
-          onRefresh={handleRefresh}
-          onClose={() => setShowControls(false)}
-        />
-      )}
-
-      <div style={{ padding:"4px 12px", display:"flex", flexDirection:"column", gap:6, height:"100%", boxSizing:"border-box" }}>
-
-        {/* Personalization status banner */}
-        {trendingPrefs.onboardingCompleted && (
-          <TrendingBanner
-            prefs={trendingPrefs}
-            onPersonalize={() => setEditingPrefs(true)}
-            onOpenControls={() => setShowControls(s => !s)}
-          />
-        )}
-
-        <div style={{ background:"#fff", borderRadius:16, padding:"6px 10px", boxShadow:"0 1px 4px #0001", flex:1, display:"flex", flexDirection:"column" }}>
-          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
-            <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
-            <div style={{ textAlign:"center" }}>
-              <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Top Trending</div>
-              <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
-            </div>
-            <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
-          </div>
-          <div data-tour="trending-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, flex:1 }}>
-            {MONTHS.map((m, i) => {
-              const pick = picks[i];
-              const hasBooks = trendingData.months[i].books?.length > 0;
-              return (
-                <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
-                  <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
-                  {pick ? (
-                    <div style={{ position:"relative", flex:1, display:"flex" }}>
-                      <Cover book={pick} size="md" />
-                      <span style={{ position:"absolute", top:-4, right:-4, fontSize:12, background:"#fff", borderRadius:99, width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 1px 3px #0002" }}>🏆</span>
-                    </div>
-                  ) : (
-                    <div style={{ flex:1, width:56, borderRadius:6, background: hasBooks?"#fef9c3":"#f5f5f4", border:`2px dashed ${hasBooks?"#fde047":"#e5e7eb"}`, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:2 }}>
-                      {hasBooks ? <span style={{ fontSize:12 }}>🔥</span> : <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ─── Trending Month Detail ──────────────────────────────────────────────────
-function TrendingMonth({ trendingData, saveTrending, year, idx, setIdx, onBack, trendingPrefs }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [showBracket, setShowBracket] = useState(false);
-  const [monthBattle, setMonthBattle] = useState(null);
-  const [detailBook, setDetailBook] = useState(null);
-  const swipeX = useRef(null);
-  const swipeY = useRef(null);
-
-  const m = trendingData.months[idx];
-  const monthPicks = m.bracketPicks || {};
-  const rankedBooks = rankTrending(m.books, trendingPrefs);
-
-  useEffect(() => {
-    const needsEnrich = m.books.length > 0 && m.books.some(b => !b._enriched);
-    if (needsEnrich) {
-      enrichBooks(m.books).then(books => {
-        const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
-        saveTrending(nd);
-      });
-      return;
-    }
-    if (m.books.length > 0) return;
-    setLoading(true);
-    setError("");
-    const selectedCats = trendingPrefs?.preferences?.selectedCategories || [];
-    Promise.all([
-      fetchTrendingBooks(year, idx),
-      ...selectedCats.slice(0, 3).map(cat => fetchGenreTrending(year, idx, cat)),
-    ])
-      .then(([base, ...genreArrays]) => {
-        const seen = new Set();
-        const merged = [...base, ...genreArrays.flat()].filter(b => {
-          if (seen.has(b.id)) return false;
-          seen.add(b.id);
-          return true;
-        });
-        return enrichBooks(merged);
-      })
-      .then(books => {
-        const nd = { ...trendingData, months: trendingData.months.map((mo, i) => i === idx ? { ...mo, books } : mo) };
-        saveTrending(nd);
-        setLoading(false);
-      })
-      .catch(() => { setError("Couldn't load trending books"); setLoading(false); });
-  }, [idx, year]);
-
-  const onTouchStart = (e) => { swipeX.current = e.touches[0].clientX; swipeY.current = e.touches[0].clientY; };
-  const onTouchEnd = (e) => {
-    if (swipeX.current === null) return;
-    const dx = swipeX.current - e.changedTouches[0].clientX;
-    const dy = swipeY.current - e.changedTouches[0].clientY;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      setShowBracket(false); setMonthBattle(null);
-      if (dx > 0) setIdx(Math.min(11, idx + 1));
-      else setIdx(Math.max(0, idx - 1));
-    }
-    swipeX.current = null;
-  };
-
-  const trendingVote = (matchId, book) => {
-    const nd = { ...trendingData, months: trendingData.months.map((mo, i) => {
-      if (i !== idx) return mo;
-      const newPicks = { ...monthPicks, [matchId]: book };
-      const bracket = buildBracket(mo.books);
-      const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
-      const winner = (finalMatch && newPicks[finalMatch.id]) ? newPicks[finalMatch.id] : mo.winner;
-      return { ...mo, bracketPicks: newPicks, winner };
-    }) };
-    saveTrending(nd);
-    setMonthBattle(null);
-  };
-
-  const trendingClearVote = (matchId) => {
-    const nd = { ...trendingData, months: trendingData.months.map((mo, i) => {
-      if (i !== idx) return mo;
-      const newPicks = { ...(mo.bracketPicks || {}) };
-      delete newPicks[matchId];
-      return { ...mo, bracketPicks: newPicks, winner: null };
-    }) };
-    saveTrending(nd);
-  };
-
-  const resetTrendingBracket = () => {
-    if (!confirm("Reset this month's picks?")) return;
-    const nd = { ...trendingData, months: trendingData.months.map((mo, i) =>
-      i === idx ? { ...mo, bracketPicks: {}, winner: null } : mo
-    ) };
-    saveTrending(nd);
-  };
-
-  // ── Battle screen ──
-  if (monthBattle && m.books.length >= 2) {
-    const bracket = buildBracket(m.books);
-    const match = bracket.rounds.flat().find(mt => mt.id === monthBattle);
-    if (match) {
-      const contenders = [];
-      if (match.a !== undefined) {
-        contenders.push(match.a, match.b);
-        if (match.c) contenders.push(match.c);
-      } else {
-        if (match.feedA) { const w = getBracketWinner(match.feedA, bracket.rounds, monthPicks); if (w) contenders.push(w); }
-        if (match.feedB) { const w = getBracketWinner(match.feedB, bracket.rounds, monthPicks); if (w) contenders.push(w); }
-        if (match.feedC) { const w = getBracketWinner(match.feedC, bracket.rounds, monthPicks); if (w) contenders.push(w); }
-      }
-      const winner = monthPicks[monthBattle];
-      const roundNum = bracket.rounds.findIndex(r => r.some(mt => mt.id === monthBattle)) + 1;
-      const isFinal = roundNum === bracket.rounds.length;
-      const isTriple = contenders.length === 3;
-
-      return (
-        <>
-          {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
-          <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
-          <button onClick={() => setMonthBattle(null)}
-            style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
-            ‹ Back to bracket
-          </button>
-          <div style={{ textAlign:"center" }}>
-            <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
-            <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
-          </div>
-          <div style={{ display:"flex", gap: isTriple ? 8 : 12, position:"relative" }}>
-            {contenders.filter(Boolean).map((book) => {
-              const won = winner?.id === book?.id;
-              const lost = winner && !won;
-              return (
-                <button key={book?.id} onClick={() => trendingVote(monthBattle, book)}
-                  style={{ flex:1, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
-                  <Cover book={book} size={isTriple ? "md" : "lg"} />
-                  <div style={{ textAlign:"center" }}>
-                    <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
-                    {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
-                    {book?.avgRating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3 }}>★ {book.avgRating.toFixed(1)}</div>}
-                  </div>
-                  {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
-                  <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
-                    style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
-                </button>
-              );
-            })}
-            {!isTriple && <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>}
-          </div>
-          {winner && (
-            <div style={{ textAlign:"center" }}>
-              <div style={{ fontSize:13, color:"#15803d", fontWeight:800 }}>
-                {isFinal ? `"${winner.title}" is your pick!` : `"${winner.title}" advances!`}
-              </div>
-              <button onClick={() => trendingClearVote(monthBattle)}
-                style={{ fontSize:11, color:"#a8a29e", background:"none", border:"none", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>Change pick</button>
-              {isFinal && idx < 11 && (
-                <div style={{ marginTop:10 }}>
-                  <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
-                    style={{ background:"#14532d", color:"#fff", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
-                    Continue to {FULL[idx + 1]} →
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        </>
-      );
-    }
-  }
-
-  // ── Bracket overview ──
-  if (showBracket && m.books.length >= 2) {
-    const bracket = buildBracket(m.books);
-    const { rounds } = bracket;
-    return (
-      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
-        <button onClick={() => setShowBracket(false)}
-          style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
-          ‹ Back to {FULL[idx]}
-        </button>
         <div style={{ textAlign:"center" }}>
-          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>{FULL[idx]} Bracket</div>
-          <div style={{ fontSize:12, color:"#9ca3af", marginTop:2 }}>{m.books.length} books — pick your favourite</div>
+          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>📖 New Releases</div>
+          <div style={{ fontSize:11, color:"#9ca3af", marginTop:2 }}>Curated catalog</div>
         </div>
-        {Object.keys(monthPicks).length > 0 && (
-          <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <button onClick={resetTrendingBracket}
-              style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>Reset</button>
+
+        {books.length === 0 ? (
+          <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>
+            No releases yet — check back soon!
           </div>
-        )}
-        {rounds.map((round, ri) => {
-          const isFinal = ri === rounds.length - 1;
-          return (
-            <div key={ri} style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, textAlign:"center" }}>{isFinal ? "Final" : `Round ${ri + 1}`}</div>
-              <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(round.length, 3)}, 1fr)`, gap:8 }}>
-                {round.map(match => {
-                  const contenders = [];
-                  if (match.a !== undefined) {
-                    contenders.push(match.a, match.b);
-                    if (match.c) contenders.push(match.c);
-                  } else {
-                    if (match.feedA) { const w = getBracketWinner(match.feedA, rounds, monthPicks); if (w) contenders.push(w); }
-                    if (match.feedB) { const w = getBracketWinner(match.feedB, rounds, monthPicks); if (w) contenders.push(w); }
-                    if (match.feedC) { const w = getBracketWinner(match.feedC, rounds, monthPicks); if (w) contenders.push(w); }
-                  }
-                  const winner = monthPicks[match.id];
-                  const needed = match.a !== undefined ? (match.c ? 3 : 2) : (match.feedC ? 3 : 2);
-                  const ready = contenders.length === needed && !winner;
-                  const locked = !winner && !ready;
-                  const canClick = ready || !!winner;
+        ) : (
+          grouped.map(({ label, books: groupBooks }) => (
+            <div key={label}>
+              <div style={{ fontSize:11, fontWeight:800, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, marginBottom:8 }}>
+                {label}
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {groupBooks.map(book => {
+                  const cs = isComingSoon(book);
+                  const title = book.title ?? "Unknown Title";
+                  const creators = Array.isArray(book.creators) ? book.creators : [];
+                  const genres = Array.isArray(book.genres) ? book.genres
+                    : (Array.isArray(book.tags) ? book.tags : []);
+                  const coverUrl = book.cover_url ?? book.metadata?.coverUrl ?? "";
                   return (
-                    <button key={match.id} onClick={() => canClick ? setMonthBattle(match.id) : null}
-                      style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"10px 4px", background: winner ? "#f0fdf4" : "#fff", border: locked ? "2px dashed #e7e5e4" : `2px solid ${winner ? "#22c55e" : "#e7e5e4"}`, borderRadius:14, cursor: canClick ? "pointer" : "default", opacity: locked ? 0.4 : 1, transition:"all .2s" }}>
-                      {winner ? (
-                        <>
-                          <Cover book={winner} size="sm" />
-                          <div style={{ fontSize:9, fontWeight:700, color:"#15803d", lineHeight:1.2, textAlign:"center", maxWidth:80 }}>{winner.title}</div>
-                          <div style={{ fontSize:7, color:"#22c55e", fontWeight:800, textTransform:"uppercase", letterSpacing:1 }}>Winner</div>
-                        </>
-                      ) : ready ? (
-                        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
-                          <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-                            {contenders.map((book, ci) => (
-                              <div key={book.id} style={{ display:"flex", alignItems:"center", gap:4 }}>
-                                {ci > 0 && <span style={{ fontSize:9, fontWeight:800, color:"#78716c" }}>vs</span>}
-                                <Cover book={book} size="xs" />
-                              </div>
+                    <div key={book.id}
+                      onClick={() => setDetailBook({ title, author: creators[0] ?? "", cover: coverUrl })}
+                      style={{ display:"flex", gap:12, background:"#fff", borderRadius:14, padding:"12px", border:"1px solid #e5e7eb", cursor:"pointer" }}>
+                      {coverUrl ? (
+                        <img src={coverUrl} alt={title} style={{ width:56, height:80, objectFit:"cover", borderRadius:6, flexShrink:0 }} />
+                      ) : (
+                        <div style={{ width:56, height:80, borderRadius:6, background:"#f5f5f4", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>📚</div>
+                      )}
+                      <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:4 }}>
+                        <div style={{ fontWeight:700, fontSize:14, color:"#1c1917", lineHeight:1.3 }}>{title}</div>
+                        {creators.length > 0 && (
+                          <div style={{ fontSize:12, color:"#78716c" }}>{creators.join(", ")}</div>
+                        )}
+                        {cs && (
+                          <div style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fef9c3", borderRadius:99, padding:"2px 8px", fontSize:10, fontWeight:700, color:"#92400e", width:"fit-content" }}>
+                            🕐 Coming Soon
+                          </div>
+                        )}
+                        {genres.length > 0 && (
+                          <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:2 }}>
+                            {genres.slice(0, 3).map(g => (
+                              <span key={g} style={{ fontSize:10, background:"#f0fdf4", color:"#15803d", borderRadius:99, padding:"1px 7px", fontWeight:600 }}>{g}</span>
                             ))}
                           </div>
-                          <div style={{ fontSize:8, fontWeight:700, color:"#78716c", display:"flex", alignItems:"center", gap:3 }}>
-                            <span style={{ fontSize:10 }}>⚔️</span> Battle Ready
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize:11, color:"#d6d3d1", padding:"8px 0" }}>🔒</div>
-                      )}
-                    </button>
+                        )}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
             </div>
-          );
-        })}
-        {m.winner && (
-          <div style={{ background:"linear-gradient(135deg,#166534,#14532d)", borderRadius:20, padding:18, textAlign:"center", color:"#fff" }}>
-            <div style={{ fontSize:10, opacity:.65, textTransform:"uppercase", letterSpacing:2, marginBottom:6 }}>Winner</div>
-            <Cover book={m.winner} size="lg" />
-            <div style={{ fontWeight:800, fontSize:16, marginTop:8 }}>{m.winner.title}</div>
-            {m.winner.author && <div style={{ fontSize:12, opacity:.7, marginTop:2 }}>{m.winner.author}</div>}
-            {idx < 11 && (
-              <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(idx + 1); }}
-                style={{ marginTop:12, background:"#fff", color:"#14532d", border:"none", borderRadius:99, padding:"10px 24px", fontWeight:800, fontSize:13, cursor:"pointer" }}>
-                Continue to {FULL[idx + 1]} →
-              </button>
-            )}
-          </div>
+          ))
         )}
       </div>
-    );
-  }
-
-  // ── Main view: book list (read-only, no add/delete) ──
-  return (
-    <>
-    {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
-    <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
-      style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}>
-
-      <button onClick={onBack}
-        style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
-        ‹ Back to Trending
-      </button>
-
-      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-        <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(Math.max(0, idx - 1)); }} disabled={idx === 0}
-          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:idx===0?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:idx===0?"#d6d3d1":"#14532d" }}>‹</button>
-        <div style={{ flex:1, textAlign:"center" }}>
-          <div style={{ fontWeight:800, fontSize:20, color:"#1c1917" }}>{FULL[idx]}</div>
-          <div style={{ fontSize:10, color:"#9ca3af" }}>Trending on Goodreads</div>
-        </div>
-        <button onClick={() => { setShowBracket(false); setMonthBattle(null); setIdx(Math.min(11, idx + 1)); }} disabled={idx === 11}
-          style={{ width:36, height:36, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:18, cursor:idx===11?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:idx===11?"#d6d3d1":"#14532d" }}>›</button>
-      </div>
-
-      {loading && <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>Loading trending books...</div>}
-      {error && <div style={{ textAlign:"center", color:"#dc2626", fontSize:13, padding:"20px 0" }}>{error}</div>}
-
-      {!loading && m.books.length >= 2 && (
-        <button onClick={() => { setShowBracket(true); setMonthBattle(null); }}
-          style={{ background: m.winner ? "linear-gradient(135deg,#166534,#14532d)" : "#14532d", color:"#fff", border:"none", borderRadius:14, padding:"14px 16px", fontWeight:800, fontSize:14, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, boxShadow:"0 2px 8px #14532d44" }}>
-          {m.winner ? `⭐ ${m.winner.title}` : "⚔️ Pick your favourite"}
-          <span style={{ fontSize:11, opacity:.7 }}>→</span>
-        </button>
-      )}
-
-      {!loading && rankedBooks.map((book, bi) => (
-        <div key={book.id} onClick={() => setDetailBook(book)} style={{ display:"flex", alignItems:"center", gap:10, background:"#fff", borderRadius:14, padding:"10px 12px", border:`2px solid ${m.winner?.id === book.id ? "#22c55e" : "#e7e5e4"}`, cursor:"pointer" }}>
-          <div style={{ fontSize:14, fontWeight:800, color:"#14532d", width:22, textAlign:"center", flexShrink:0 }}>{bi + 1}</div>
-          <Cover book={book} size="sm" />
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontWeight:700, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:13 }}>{book.title}</div>
-            {book.author && <div style={{ fontSize:11, color:"#78716c", marginTop:1 }}>{book.author}</div>}
-            <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:3 }}>
-              {book.avgRating && <span style={{ fontSize:11, color:"#f59e0b", fontWeight:700 }}>★ {book.avgRating.toFixed(1)}</span>}
-              {book.popularity > 0 && <span style={{ fontSize:10, color:"#9ca3af" }}>{fmtCount(book.popularity)} added</span>}
-            </div>
-          </div>
-          {m.winner?.id === book.id && <span style={{ fontSize:14 }}>🏆</span>}
-        </div>
-      ))}
-    </div>
     </>
   );
 }
 
 // ─── Bracket Hub ─────────────────────────────────────────────────────────────
-function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattleId, year, openShare, ob, markOb }) {
+function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, markOb }) {
   const [mode, setMode] = useState(null);
 
   if (mode === "shelf") {
     return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
   }
-  if (mode === "popular") {
-    return <Bracket data={trendingData} save={saveTrending} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="Popular Releases" />;
-  }
 
   const shelfPicks = data.months.filter(m => m.winner).length;
-  const trendingPicks = trendingData.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
-  const trendingChamp = trendingData.bracket?.["final"];
 
   const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
 
@@ -1630,17 +1291,6 @@ function BracketHub({ data, trendingData, save, saveTrending, battleId, setBattl
           <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
           <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
             {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
-          </div>
-        </div>
-        <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
-      </button>
-
-      <button onClick={() => setMode("popular")} style={cardStyle}>
-        <span style={{ fontSize:28 }}>🔥</span>
-        <div style={{ flex:1 }}>
-          <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>Popular Releases</div>
-          <div style={{ fontSize:12, color: trendingChamp ? "#15803d" : "#78716c", marginTop:2 }}>
-            {trendingChamp ? `🏆 ${trendingChamp.title}` : `${trendingPicks}/12 monthly picks`}
           </div>
         </div>
         <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>

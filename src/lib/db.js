@@ -17,8 +17,7 @@
  */
 
 import { supabase } from "./supabase.js";
-import { createStore, freshData, freshTrendingData } from "../shared/storage.js";
-import { getTrendingPrefs, setTrendingPrefs } from "../shared/trendingPreferences.js";
+import { createStore, freshData } from "../shared/storage.js";
 
 // ─── Local fallbacks ──────────────────────────────────────────────────────────
 
@@ -378,50 +377,115 @@ export async function syncShelfData(userId, categoryId, year, data) {
   ].filter(Boolean));
 }
 
-// ─── Trending preferences ─────────────────────────────────────────────────────
+// ─── New Releases (curated catalog) ──────────────────────────────────────────
 
-export async function loadTrendingPrefs(userId, categoryId) {
-  if (!supabase || !userId) {
-    return getTrendingPrefs(categoryId);
+/**
+ * Fetch admin-verified items ordered by release date descending.
+ * Optionally filter to a specific year or month.
+ *
+ * @param {{ year?: number, month?: number, limit?: number }} opts
+ * @returns {Promise<Array>}
+ */
+export async function getNewReleases({ year, month, limit = 100 } = {}) {
+  if (!supabase) return [];
+  let q = supabase
+    .from("items")
+    .select("id, title, creators, cover_url, description, genres, tags, published_at, published_year, published_month, external_ids, metadata")
+    .eq("is_verified", true)
+    .not("published_at", "is", null)
+    .order("published_at", { ascending: false })
+    .limit(limit);
+  if (year)  q = q.eq("published_year",  year);
+  if (month) q = q.eq("published_month", month);
+  const { data, error } = await q;
+  if (error) { console.error("getNewReleases error:", error); return []; }
+  return data || [];
+}
+
+/**
+ * Upsert a verified catalog item (admin only — enforced by DB policy).
+ * Deduplicates by google_books_id stored in external_ids.
+ *
+ * @param {object} book  Normalised book from the Google Books proxy
+ * @param {string} categoryId
+ * @returns {Promise<string|null>}  The item UUID, or null on failure
+ */
+export async function upsertVerifiedItem(book, categoryId) {
+  if (!supabase) return null;
+
+  // Parse published_at — Google Books gives "2024-09-26", "2024-09", or "2024"
+  let publishedAt     = null;
+  let publishedYear   = null;
+  let publishedMonth  = null;
+  if (book.publishedDate) {
+    const parts = book.publishedDate.split("-");
+    publishedYear  = parts[0] ? parseInt(parts[0], 10) : null;
+    publishedMonth = parts[1] ? parseInt(parts[1], 10) : null;
+    if (publishedYear && publishedMonth) {
+      publishedAt = `${parts[0]}-${parts[1].padStart(2, "0")}-${(parts[2] || "01").padStart(2, "0")}`;
+    } else if (publishedYear) {
+      publishedAt = `${parts[0]}-01-01`;
+    }
+  }
+
+  const payload = {
+    category_id:    categoryId,
+    title:          book.title || "",
+    creators:       book.authors || [],
+    cover_url:      book.coverUrl || null,
+    description:    book.description || null,
+    genres:         book.genres || [],
+    tags:           [],
+    external_ids:   { google_books_id: book.googleBooksId },
+    metadata:       {
+      isbn13:       book.isbn13 || null,
+      page_count:   book.pageCount || null,
+      language:     book.language || null,
+      preview_link: book.previewLink || null,
+    },
+    published_at:    publishedAt,
+    published_year:  publishedYear,
+    published_month: publishedMonth,
+    is_verified:     true,
+    source:          "google_books",
+    source_id:       book.googleBooksId,
+  };
+
+  // Check for existing item by google_books_id to avoid duplicates
+  const { data: existing } = await supabase
+    .from("items")
+    .select("id")
+    .eq("source", "google_books")
+    .eq("source_id", book.googleBooksId)
+    .maybeSingle();
+
+  if (existing?.id) {
+    // Update in place
+    await supabase.from("items").update(payload).eq("id", existing.id);
+    return existing.id;
   }
 
   const { data, error } = await supabase
-    .from("trending_preferences")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("category_id", categoryId)
-    .maybeSingle();
+    .from("items")
+    .insert(payload)
+    .select("id")
+    .single();
 
-  if (error || !data) return getTrendingPrefs(categoryId);
-
-  return {
-    onboardingCompleted:   true,
-    personalizationEnabled: data.personalization_enabled,
-    preferences: {
-      selectedCategories: data.selected_categories || [],
-      selectedTags:       data.selected_tags || [],
-      excludedTags:       data.excluded_tags || [],
-      discoveryMode:      data.discovery_mode || "balanced",
-    },
-  };
+  if (error) { console.error("upsertVerifiedItem error:", error); return null; }
+  return data?.id || null;
 }
 
-export async function saveTrendingPrefs(userId, categoryId, prefs) {
-  // Always persist locally first so there's no latency on next load
-  setTrendingPrefs(categoryId, prefs);
-
-  if (!supabase || !userId) return;
-
-  await supabase.from("trending_preferences").upsert({
-    user_id:                userId,
-    category_id:            categoryId,
-    personalization_enabled: prefs.personalizationEnabled ?? false,
-    selected_categories:    prefs.preferences?.selectedCategories || [],
-    selected_tags:          prefs.preferences?.selectedTags || [],
-    excluded_tags:          prefs.preferences?.excludedTags || [],
-    discovery_mode:         prefs.preferences?.discoveryMode || "balanced",
-    updated_at:             new Date().toISOString(),
-  }, { onConflict: "user_id,category_id" });
+/**
+ * Remove a verified item from the catalog (admin only).
+ * Soft-removes by setting is_verified = false rather than deleting,
+ * so user shelf references aren't broken.
+ */
+export async function removeVerifiedItem(itemId) {
+  if (!supabase) return;
+  await supabase
+    .from("items")
+    .update({ is_verified: false })
+    .eq("id", itemId);
 }
 
 // ─── Admin queries ───────────────────────────────────────────────────────────
