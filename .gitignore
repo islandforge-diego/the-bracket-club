@@ -6,3 +6,8 @@ dist
 *.mjs.timestamp-*
 .claude/
 .env.local
+
+# Seed catalog artifacts (regenerable via scripts/seed-catalog/fetch.js)
+scripts/seed-catalog/data.json
+scripts/seed-catalog/data.sql
+scripts/seed-catalog/chunks/
