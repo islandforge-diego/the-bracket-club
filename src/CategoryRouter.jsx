@@ -12,16 +12,17 @@
  */
 
 import { useState } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, Link } from "react-router-dom";
 import BooksApp from "./App.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import LoginModal from "./lib/LoginModal.jsx";
+import AdminPage from "./lib/AdminPage.jsx";
 
 // Future category imports go here, e.g.:
 // import MoviesApp from "./pages/movies/MoviesApp.jsx";
 
 function AccountButton() {
-  const { user, loading, signOut } = useAuth();
+  const { user, loading, signOut, isAdmin } = useAuth();
   const [showLogin, setShowLogin]  = useState(false);
   const [showMenu,  setShowMenu]   = useState(false);
 
@@ -72,6 +73,19 @@ function AccountButton() {
           <div style={{ padding: "8px 16px", fontSize: 13, color: "#64748b", borderBottom: "1px solid #f1f5f9" }}>
             {user.user_metadata?.display_name || user.email}
           </div>
+          {isAdmin && (
+            <Link
+              to="/admin"
+              onClick={() => setShowMenu(false)}
+              style={{
+                display: "block", padding: "10px 16px",
+                fontSize: 14, color: "#6366f1", textDecoration: "none",
+                fontWeight: 600, borderBottom: "1px solid #f1f5f9",
+              }}
+            >
+              Admin dashboard
+            </Link>
+          )}
           <button
             onClick={() => { signOut(); setShowMenu(false); }}
             style={{
@@ -104,6 +118,9 @@ export default function CategoryRouter() {
 
       {/* Books category — the current app */}
       <Route path="/books/*" element={<BooksApp />} />
+
+      {/* Admin dashboard (server-side guarded by is_admin() RLS) */}
+      <Route path="/admin" element={<AdminPage />} />
 
       {/* Future categories:
           <Route path="/movies/*" element={<MoviesApp />} />

@@ -424,6 +424,29 @@ export async function saveTrendingPrefs(userId, categoryId, prefs) {
   }, { onConflict: "user_id,category_id" });
 }
 
+// ─── Admin queries ───────────────────────────────────────────────────────────
+// These read from views that filter on is_admin() — non-admins get zero rows.
+
+export async function loadAdminUserSummary() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("admin_user_summary")
+    .select("*")
+    .order("signed_up_at", { ascending: false });
+  if (error) { console.error("admin_user_summary error:", error); return []; }
+  return data || [];
+}
+
+export async function loadAdminPlatformStats() {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("admin_platform_stats")
+    .select("*")
+    .maybeSingle();
+  if (error) { console.error("admin_platform_stats error:", error); return null; }
+  return data;
+}
+
 // ─── localStorage → Supabase migration ───────────────────────────────────────
 
 // Call once after a user signs in for the first time.

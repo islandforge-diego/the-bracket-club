@@ -16,7 +16,17 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user,    setUser]    = useState(null);
   const [session, setSession] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(!!supabase); // skip loading when no client
+
+  // Look up the profile.is_admin flag whenever the user changes.
+  // RLS guarantees this can only return true for the user's own row.
+  const refreshAdmin = async (userId) => {
+    if (!supabase || !userId) { setIsAdmin(false); return; }
+    const { data } = await supabase
+      .from("profiles").select("is_admin").eq("id", userId).maybeSingle();
+    setIsAdmin(!!data?.is_admin);
+  };
 
   useEffect(() => {
     if (!supabase) return;
@@ -25,6 +35,7 @@ export function AuthProvider({ children }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setUser(data.session?.user ?? null);
+      refreshAdmin(data.session?.user?.id);
       setLoading(false);
     });
 
@@ -34,6 +45,7 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
+      refreshAdmin(s?.user?.id);
 
       if (event === "SIGNED_IN" && s?.user) {
         const pending = localStorage.getItem("pending_marketing_consent");
@@ -80,7 +92,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signIn, signUp, signOut, signInWithGoogle }}>
+    <AuthContext.Provider value={{ user, session, loading, isAdmin, signIn, signUp, signOut, signInWithGoogle }}>
       {children}
     </AuthContext.Provider>
   );
