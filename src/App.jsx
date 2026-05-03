@@ -322,7 +322,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ height:"100dvh", background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+    <div style={{ height:"100dvh", maxHeight:812, background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 0 0 1px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10)" }}>
       {/* Header */}
       <div style={{ background:"#14532d", color:"#fff", textAlign:"center", padding:"6px 16px 2px", flexShrink:0, zIndex:20, boxShadow:"0 2px 8px #0002" }}>
         <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
