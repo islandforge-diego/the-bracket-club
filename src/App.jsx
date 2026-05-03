@@ -29,7 +29,7 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
-import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getNewReleases } from "./lib/db.js";
+import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
 
 const CAT = getCategoryConfig();
@@ -361,7 +361,7 @@ export default function App() {
             goBracket={() => setView("bracket")} goImport={() => setView("import")}
             openShare={() => setShowShare(true)} ob={ob} markOb={markOb} isDesktop />
         ) : view === "popular" ? (
-          <NewReleases year={year} isDesktop />
+          <NewReleases year={year} setYear={setYear} isDesktop />
         ) : (
           <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
             year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
@@ -397,7 +397,7 @@ export default function App() {
               <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <NewReleases year={year} />
+              <NewReleases year={year} setYear={setYear} />
             </div>
             <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
               <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
@@ -1214,110 +1214,162 @@ function Month({ data, save, idx, setIdx, onBack }) {
 }
 
 // ─── New Releases ─────────────────────────────────────────────────────────────
-function NewReleases({ year, isDesktop = false }) {
-  const [books, setBooks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [detailBook, setDetailBook] = useState(null);
+//
+// Mirrors the Home tab pattern:
+//   year picker + 12-month grid where each card shows the most popular release
+//   for that month.  Tap a month → MonthReleases detail view with the full
+//   sorted list.  Year is shared with Home so navigating to "2010" stays in
+//   2010 when switching tabs.
+//
+function NewReleases({ year, setYear, isDesktop = false }) {
+  const [topByMonth,    setTopByMonth]    = useState({});
+  const [loading,       setLoading]       = useState(true);
+  const [error,         setError]         = useState("");
+  const [selectedMonth, setSelectedMonth] = useState(null);
 
-  const today = new Date();
-  const MONTH_NAMES = ["January","February","March","April","May","June",
-                       "July","August","September","October","November","December"];
+  // Year navigation bounds — matches the catalog's actual coverage so users
+  // can't paginate into empty space forever.
+  const MIN_YEAR = 1950;
+  const MAX_YEAR = 2031;
 
   useEffect(() => {
     setLoading(true);
     setError("");
-    getNewReleases()
+    setSelectedMonth(null);                       // close detail when year changes
+    getReleasesGridForYear(year)
+      .then(map => { setTopByMonth(map); setLoading(false); })
+      .catch(() => { setError("Couldn't load releases"); setLoading(false); });
+  }, [year]);
+
+  // ── Detail view ────────────────────────────────────────────────────────────
+  if (selectedMonth !== null) return (
+    <MonthReleases
+      year={year} month={selectedMonth + 1}        // 0-11 → 1-12
+      onBack={() => setSelectedMonth(null)}
+      isDesktop={isDesktop}
+    />
+  );
+
+  // ── Year + grid view ───────────────────────────────────────────────────────
+  return (
+    <div style={{ padding: isDesktop ? 0 : "4px 12px", display:"flex", flexDirection:"column", gap: isDesktop ? 20 : 6, height: isDesktop ? "auto" : "100%", boxSizing:"border-box", maxWidth: isDesktop ? 1100 : "none", margin: isDesktop ? "0 auto" : undefined, width:"100%" }}>
+
+      {/* Header */}
+      <div style={{ background:"#fff", borderRadius:16, padding: isDesktop ? "20px 24px" : "6px 10px", boxShadow:"0 1px 4px #0001", flex: isDesktop ? "none" : 1, display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
+          <button onClick={() => setYear?.(y => Math.max(MIN_YEAR, y - 1))} disabled={year <= MIN_YEAR} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=MIN_YEAR?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=MIN_YEAR?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>📖 {year} Releases</div>
+            <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>most popular</div>
+          </div>
+          <button onClick={() => setYear?.(y => Math.min(MAX_YEAR, y + 1))} disabled={year >= MAX_YEAR} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=MAX_YEAR?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=MAX_YEAR?"#d6d3d1":"#14532d", padding:0 }}>›</button>
+        </div>
+
+        {/* 12-month grid (3-col mobile, 4-col desktop) */}
+        <div style={{ display:"grid", gridTemplateColumns:`repeat(${isDesktop ? 4 : 3},1fr)`, gap: isDesktop ? 16 : 6, flex: isDesktop ? "none" : 1, opacity: loading ? 0.4 : 1, transition:"opacity 200ms" }}>
+          {MONTHS.map((mLabel, i) => {
+            const top = topByMonth[i];               // single most-popular release for month i
+            return (
+              <button key={mLabel} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+                <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{mLabel}</span>
+                {top ? (
+                  <div style={{ position:"relative", flex: isDesktop ? "none" : 1, display:"flex", justifyContent:"center" }}>
+                    <Cover book={{ title: top.title, cover: top.cover_url }} size="md" />
+                  </div>
+                ) : (
+                  <div style={{ flex: isDesktop ? "none" : 1, height: isDesktop ? 120 : undefined, width: isDesktop ? "100%" : 56, borderRadius:6, background:"#f5f5f4", border:"2px dashed #e5e7eb", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                    <span style={{ fontSize:9, color:"#d6d3d1", fontWeight:700 }}>TBD</span>
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ textAlign:"center", color:"#dc2626", fontSize:12, padding:"8px 0" }}>{error}</div>
+      )}
+    </div>
+  );
+}
+
+// ─── Month Releases (detail view shown after tapping a month card) ───────────
+function MonthReleases({ year, month, onBack, isDesktop = false }) {
+  const [books, setBooks]           = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [detailBook, setDetailBook] = useState(null);
+  const today = new Date();
+
+  useEffect(() => {
+    setLoading(true);
+    getReleasesForMonth(year, month)
       .then(data => { setBooks(data); setLoading(false); })
-      .catch(() => { setError("Couldn't load new releases"); setLoading(false); });
-  }, []);
+      .catch(() => setLoading(false));
+  }, [year, month]);
 
-  // Group books by "Month Year" label, preserving server order (published_at DESC)
-  const grouped = [];
-  const seen = new Set();
-  books.forEach(book => {
-    const label = book.published_month != null && book.published_year != null
-      ? `${MONTH_NAMES[book.published_month - 1]} ${book.published_year}`
-      : book.published_year != null ? String(book.published_year) : "Unknown";
-    if (!seen.has(label)) { seen.add(label); grouped.push({ label, books: [] }); }
-    grouped.find(g => g.label === label).books.push(book);
-  });
-
+  const monthLabel = FULL[month - 1];               // FULL = ["January","February",…]
   const isComingSoon = (book) => book.published_at ? new Date(book.published_at) > today : false;
-
-  if (loading) return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100%", color:"#9ca3af", fontSize:14 }}>
-      📖 Loading...
-    </div>
-  );
-
-  if (error) return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100%", color:"#dc2626", fontSize:13 }}>
-      {error}
-    </div>
-  );
 
   return (
     <>
       {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
       <div style={{ padding: isDesktop ? 0 : "12px", display:"flex", flexDirection:"column", gap:16, maxWidth: isDesktop ? 1100 : "none", margin: isDesktop ? "0 auto" : undefined, width:"100%" }}>
 
-        <div style={{ textAlign:"center" }}>
-          <div style={{ fontWeight:800, fontSize:18, color:"#1c1917" }}>📖 New Releases</div>
-          <div style={{ fontSize:11, color:"#9ca3af", marginTop:2 }}>Curated catalog</div>
+        {/* Header with back button */}
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <button onClick={onBack} style={{ width:32, height:32, borderRadius:99, border:"1px solid #e5e7eb", background:"#fff", cursor:"pointer", fontSize:16, color:"#14532d", display:"flex", alignItems:"center", justifyContent:"center", padding:0 }}>‹</button>
+          <div>
+            <div style={{ fontWeight:800, fontSize:16, color:"#1c1917" }}>{monthLabel} {year}</div>
+            <div style={{ fontSize:11, color:"#9ca3af" }}>{books.length} {books.length === 1 ? "release" : "releases"}</div>
+          </div>
         </div>
 
-        {books.length === 0 ? (
+        {loading ? (
+          <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>📖 Loading…</div>
+        ) : books.length === 0 ? (
           <div style={{ textAlign:"center", color:"#9ca3af", fontSize:13, padding:"40px 0" }}>
-            No releases yet — check back soon!
+            No releases recorded for {monthLabel} {year}.
           </div>
         ) : (
-          grouped.map(({ label, books: groupBooks }) => (
-            <div key={label}>
-              <div style={{ fontSize:11, fontWeight:800, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, marginBottom:8 }}>
-                {label}
-              </div>
-              <div style={{ display: isDesktop ? "grid" : "flex", gridTemplateColumns: isDesktop ? "repeat(3, 1fr)" : undefined, flexDirection: isDesktop ? undefined : "column", gap: isDesktop ? 16 : 8 }}>
-                {groupBooks.map(book => {
-                  const cs = isComingSoon(book);
-                  const title = book.title ?? "Unknown Title";
-                  const creators = Array.isArray(book.creators) ? book.creators : [];
-                  const genres = Array.isArray(book.genres) ? book.genres
-                    : (Array.isArray(book.tags) ? book.tags : []);
-                  const coverUrl = book.cover_url ?? book.metadata?.coverUrl ?? "";
-                  return (
-                    <div key={book.id}
-                      onClick={() => setDetailBook({ title, author: creators[0] ?? "", cover: coverUrl })}
-                      style={{ display:"flex", gap:12, background:"#fff", borderRadius:14, padding: isDesktop ? "16px" : "12px", border:"1px solid #e5e7eb", cursor:"pointer", flexDirection: isDesktop ? "column" : "row", alignItems: isDesktop ? "flex-start" : "flex-start" }}>
-                      {coverUrl ? (
-                        <img src={coverUrl} alt={title} style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, objectFit:"cover", borderRadius:6, flexShrink:0 }} />
-                      ) : (
-                        <div style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, borderRadius:6, background:"#f5f5f4", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>📚</div>
-                      )}
-                      <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:4 }}>
-                        <div style={{ fontWeight:700, fontSize:14, color:"#1c1917", lineHeight:1.3 }}>{title}</div>
-                        {creators.length > 0 && (
-                          <div style={{ fontSize:12, color:"#78716c" }}>{creators.join(", ")}</div>
-                        )}
-                        {cs && (
-                          <div style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fef9c3", borderRadius:99, padding:"2px 8px", fontSize:10, fontWeight:700, color:"#92400e", width:"fit-content" }}>
-                            🕐 Coming Soon
-                          </div>
-                        )}
-                        {genres.length > 0 && (
-                          <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:2 }}>
-                            {genres.slice(0, 3).map(g => (
-                              <span key={g} style={{ fontSize:10, background:"#f0fdf4", color:"#15803d", borderRadius:99, padding:"1px 7px", fontWeight:600 }}>{g}</span>
-                            ))}
-                          </div>
-                        )}
+          <div style={{ display: isDesktop ? "grid" : "flex", gridTemplateColumns: isDesktop ? "repeat(3, 1fr)" : undefined, flexDirection: isDesktop ? undefined : "column", gap: isDesktop ? 16 : 8 }}>
+            {books.map(book => {
+              const cs       = isComingSoon(book);
+              const title    = book.title ?? "Unknown Title";
+              const creators = Array.isArray(book.creators) ? book.creators : [];
+              const genres   = Array.isArray(book.genres) ? book.genres : (Array.isArray(book.tags) ? book.tags : []);
+              const coverUrl = book.cover_url ?? "";
+              return (
+                <div key={book.id}
+                  onClick={() => setDetailBook({ title, author: creators[0] ?? "", cover: coverUrl })}
+                  style={{ display:"flex", gap:12, background:"#fff", borderRadius:14, padding: isDesktop ? "16px" : "12px", border:"1px solid #e5e7eb", cursor:"pointer", flexDirection: isDesktop ? "column" : "row" }}>
+                  {coverUrl ? (
+                    <img src={coverUrl} alt={title} style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, objectFit:"cover", borderRadius:6, flexShrink:0 }} />
+                  ) : (
+                    <div style={{ width: isDesktop ? "100%" : 56, height: isDesktop ? 180 : 80, borderRadius:6, background:"#f5f5f4", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>📚</div>
+                  )}
+                  <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:4 }}>
+                    <div style={{ fontWeight:700, fontSize:14, color:"#1c1917", lineHeight:1.3 }}>{title}</div>
+                    {creators.length > 0 && (
+                      <div style={{ fontSize:12, color:"#78716c" }}>{creators.join(", ")}</div>
+                    )}
+                    {cs && (
+                      <div style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fef9c3", borderRadius:99, padding:"2px 8px", fontSize:10, fontWeight:700, color:"#92400e", width:"fit-content" }}>
+                        🕐 Coming Soon
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))
+                    )}
+                    {genres.length > 0 && (
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:2 }}>
+                        {genres.slice(0, 3).map(g => (
+                          <span key={g} style={{ fontSize:10, background:"#f0fdf4", color:"#15803d", borderRadius:99, padding:"1px 7px", fontWeight:600 }}>{g}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </>

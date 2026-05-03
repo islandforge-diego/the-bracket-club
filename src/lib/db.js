@@ -403,6 +403,57 @@ export async function getNewReleases({ year, month, limit = 100 } = {}) {
 }
 
 /**
+ * For a year-overview grid (Jan…Dec), return the single most-popular release
+ * per month.  Returns a sparse map { 0: book, 1: book, … 11: book } — months
+ * with no releases in the catalog are omitted.
+ *
+ * Popularity is read from metadata.popularity_score (set during the seed
+ * pipeline from Open Library's edition_count); books without a score sort to
+ * the bottom by a NULLs-last fallback.
+ */
+export async function getReleasesGridForYear(year) {
+  if (!supabase) return {};
+  const { data, error } = await supabase
+    .from("items")
+    .select("id, title, creators, cover_url, published_year, published_month, metadata")
+    .eq("is_verified", true)
+    .eq("published_year", year)
+    .not("published_month", "is", null);
+  if (error) { console.error("getReleasesGridForYear error:", error); return {}; }
+
+  // Group by month → keep the highest popularity_score per bucket.
+  const byMonth = {};
+  for (const row of data || []) {
+    const m = row.published_month - 1;            // 1-12 → 0-11
+    if (m < 0 || m > 11) continue;
+    const score = row.metadata?.popularity_score ?? 0;
+    if (!byMonth[m] || score > (byMonth[m].metadata?.popularity_score ?? 0)) {
+      byMonth[m] = row;
+    }
+  }
+  return byMonth;
+}
+
+/**
+ * Full list of releases for a given year + month, sorted by popularity desc.
+ * Used by the month-detail view inside the New Releases tab.
+ */
+export async function getReleasesForMonth(year, month) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("items")
+    .select("id, title, creators, cover_url, description, genres, tags, published_at, published_year, published_month, external_ids, metadata")
+    .eq("is_verified", true)
+    .eq("published_year",  year)
+    .eq("published_month", month);
+  if (error) { console.error("getReleasesForMonth error:", error); return []; }
+  // Sort client-side by popularity_score (Postgres can't easily order by jsonb numeric)
+  return (data || []).sort((a, b) =>
+    (b.metadata?.popularity_score ?? 0) - (a.metadata?.popularity_score ?? 0)
+  );
+}
+
+/**
  * Upsert a verified catalog item (admin only — enforced by DB policy).
  * Deduplicates by google_books_id stored in external_ids.
  *
