@@ -60,13 +60,22 @@ export function getCustomBracket(id) {
   return readAll()[id] || null;
 }
 
-/** Create a new bracket; returns the new id. */
-export function createCustomBracket({ title, year, items, format }) {
+/**
+ * Create a new bracket; returns the new id.
+ *
+ * `size`  is the number of books the bracket holds (4/8/16).
+ * `month` is optional 0..11 — when set, the bracket is shown as
+ * "January 2026" in the hub list and is intended for the user to fill
+ * with that month's reads.  It's purely metadata at the storage layer.
+ * `items` is optional and defaults to [] — books get added INSIDE the
+ * bracket via the new add-books mode in CustomBracketView.
+ */
+export function createCustomBracket({ title, year, items = [], format, size = 8, month = null }) {
   const id   = `cb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const now  = new Date().toISOString();
   const all  = readAll();
   all[id] = {
-    id, title, year, items, format,
+    id, title, year, items, format, size, month,
     picks:     {},
     winner:    null,
     createdAt: now,

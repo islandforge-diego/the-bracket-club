@@ -19,10 +19,13 @@ import { useState, useEffect, useRef } from "react";
 import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
+import ItemSearch from "./ItemSearch.jsx";
 import { buildBracket, getBracketWinner } from "./bracket.js";
-import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale } from "./soundscape.js";
-import { applySeeding, DEFAULT_FORMAT } from "./bracketFormats.js";
+import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale, playStar } from "./soundscape.js";
+import { applySeeding, DEFAULT_FORMAT, getFormat } from "./bracketFormats.js";
 import { getCustomBracket, updateCustomBracket, deleteCustomBracket } from "./customBrackets.js";
+import { searchBooks } from "../categories/books/data.js";
+import { FULL } from "./constants.js";
 
 // Map our catalog genres to scale moods.  The dominant genre in the bracket's
 // items decides the scale while the user is inside the bracket — so a horror
@@ -92,6 +95,8 @@ export default function CustomBracketView({ bracketId, onBack }) {
   }
 
   const items = applySeeding(bracket.items, bracket.format || DEFAULT_FORMAT);
+  const size  = bracket.size || bracket.items.length || 8;
+  const needsBooks = (bracket.items?.length || 0) < size;
 
   const persist = (patch) => {
     const next = updateCustomBracket(bracketId, patch);
@@ -118,6 +123,30 @@ export default function CustomBracketView({ bracketId, onBack }) {
     if (!confirm("Delete this bracket forever?")) return;
     deleteCustomBracket(bracketId);
     onBack?.();
+  };
+
+  // ── Add / remove books while collecting ───────────────────────────────
+  const addBook = (book) => {
+    if (!book?.title?.trim()) return;
+    if ((bracket.items?.length || 0) >= size) return;
+    const newBook = {
+      id:            `bk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title:         book.title.trim(),
+      author:        (book.author || "").trim(),
+      cover:         (book.cover  || "").trim(),
+      googleBooksId: book.googleBooksId || null,
+      isbn13:        book.isbn13 || null,
+      description:   book.description || null,
+      genres:        book.genres || [],
+      rating:        null,
+    };
+    persist({ items: [...bracket.items, newBook] });
+    playStar();                                          // little sparkle on add
+  };
+
+  const removeBook = (id) => {
+    persist({ items: bracket.items.filter((b) => b.id !== id) });
+    playUI("back");
   };
 
   // ── Header (shared across format branches) ───────────────────────────
@@ -148,6 +177,84 @@ export default function CustomBracketView({ bracketId, onBack }) {
       onClose={() => setShowVictory(false)}
     />
   );
+
+  // ── COLLECT-BOOKS mode (bracket isn't full yet) ──────────────────────
+  // Mirrors the existing per-month "add books you read" pattern: ItemSearch
+  // bar at top, list of currently-added books, manual entry escape hatch.
+  // When items.length === size, this branch falls through and the bracket
+  // renders as normal.
+  if (needsBooks) {
+    const monthLabel = bracket.month != null ? `${FULL[bracket.month]} ${bracket.year}` : null;
+    return (
+      <>
+        {Header}
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 2 }}>
+              Add books · {getFormat(bracket.format).label}
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: "#1c1917", marginTop: 4 }}>
+              {bracket.items.length} of {size} books added
+            </div>
+            {monthLabel && (
+              <div style={{ fontSize: 12, color: "#15803d", marginTop: 2 }}>📅 {monthLabel}</div>
+            )}
+          </div>
+
+          {/* Search bar — Google Books–backed */}
+          <ItemSearch
+            placeholder="Search for a book to add…"
+            searchFn={searchBooks}
+            onSelect={addBook}
+            onManual={() => {
+              const title = window.prompt("Book title?");
+              if (!title) return;
+              const author = window.prompt("Author? (optional)") || "";
+              addBook({ title, author, cover: "" });
+            }}
+          />
+
+          {/* Currently-added books */}
+          {bracket.items.length === 0 ? (
+            <div style={{ background: "#fff", borderRadius: 14, padding: "28px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 6 }}>📚</div>
+              Search above to add books to your bracket.
+            </div>
+          ) : (
+            <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px #0001", overflow: "hidden" }}>
+              {bracket.items.map((b, i) => (
+                <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderTop: i ? "1px solid #f5f5f4" : "none" }}>
+                  <div style={{ width: 22, textAlign: "center", fontWeight: 800, fontSize: 13, color: "#9ca3af" }}>{i + 1}</div>
+                  <Cover book={b} size="xs" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</div>
+                    {b.author && <div style={{ fontSize: 11, color: "#78716c" }}>{b.author}</div>}
+                  </div>
+                  <button onClick={() => removeBook(b.id)}
+                    style={{ background: "none", border: "none", color: "#dc2626", fontSize: 16, cursor: "pointer", padding: "4px 8px" }}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Footer hint */}
+          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, padding: "8px 0" }}>
+            {size - bracket.items.length === 0
+              ? "Bracket is ready — open it to start picking!"
+              : `Add ${size - bracket.items.length} more to start the bracket.`}
+          </div>
+
+          {/* Delete option for empty / partly-filled brackets */}
+          <button onClick={onDelete}
+            style={{ width: "100%", padding: 10, background: "transparent", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            🗑️  Delete this bracket
+          </button>
+        </div>
+      </>
+    );
+  }
 
   // ── ROUND-ROBIN branch ───────────────────────────────────────────────
   if (bracket.format === "round_robin") {

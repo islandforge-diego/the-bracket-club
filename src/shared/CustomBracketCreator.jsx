@@ -1,86 +1,57 @@
 /**
- * CustomBracketCreator — single-screen wizard for creating a catalog bracket.
+ * CustomBracketCreator — modal for creating a new (empty) bracket.
  *
- * Layout (top → bottom):
- *   1. Year picker      (‹ 2024 ›)
- *   2. Size toggle      (4 / 8 / 16 books)
- *   3. Format picker    (opens the existing BracketFormatSheet)
- *   4. Book grid        (top-N from catalog for the year, multi-select)
- *   5. Title input      (auto-defaults to "Best of <year>")
- *   6. Create CTA       (disabled until selection count matches size)
+ * Only collects metadata: title, size, format, optional month tag.  Books
+ * get added INSIDE the bracket via CustomBracketView's add-books mode —
+ * splitting setup from book-collection means users can come back later
+ * and add more books, and the creation step stays light.
  *
- * On create, persists via createCustomBracket() and calls onCreated(id).
+ * On create, persists via createCustomBracket() with empty items[] and
+ * calls onCreated(id).
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
-import Cover from "./Cover.jsx";
-import { getTopBooksForYear, getYearsWithReleases } from "../lib/db.js";
 import { createCustomBracket } from "./customBrackets.js";
-import { BRACKET_FORMATS, getFormat, DEFAULT_FORMAT } from "./bracketFormats.js";
+import { getFormat, DEFAULT_FORMAT } from "./bracketFormats.js";
 import BracketFormatSheet from "./BracketFormatSheet.jsx";
+import { FULL } from "./constants.js";
 
 const SIZES = [4, 8, 16];
 
 export default function CustomBracketCreator({ onClose, onCreated }) {
-  const [year,         setYear]         = useState(new Date().getFullYear());
-  const [size,         setSize]         = useState(8);
-  const [format,       setFormat]       = useState(DEFAULT_FORMAT);
+  const [title,           setTitle]           = useState("My Bracket");
+  const [size,            setSize]            = useState(8);
+  const [format,          setFormat]          = useState(DEFAULT_FORMAT);
+  const [month,           setMonth]           = useState(null);          // null = no month, 0..11 = jan..dec
   const [showFormatSheet, setShowFormatSheet] = useState(false);
-  const [catalog,      setCatalog]      = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [picked,       setPicked]       = useState(new Set());
-  const [title,        setTitle]        = useState(`Best of ${new Date().getFullYear()}`);
-  const [yearsAvail,   setYearsAvail]   = useState([]);
 
-  // Load list of years that actually have catalog books (ascending so prev/next works)
-  useEffect(() => {
-    getYearsWithReleases().then((ys) => setYearsAvail(ys));
-  }, []);
+  const year = new Date().getFullYear();
 
-  // Load top N books whenever year changes
-  useEffect(() => {
-    setLoading(true);
-    setPicked(new Set());
-    getTopBooksForYear(year, 30)
-      .then((books) => { setCatalog(books); setLoading(false); })
-      .catch(() => { setCatalog([]); setLoading(false); });
-    setTitle(`Best of ${year}`);
-  }, [year]);
+  // Title default tracks the month when set, but only if the user hasn't
+  // typed something custom.  We detect "custom" by comparing to the auto title.
+  const autoTitle = month != null ? `Best of ${FULL[month]} ${year}` : "My Bracket";
+  const titleIsAuto = title === "My Bracket" || /^Best of /.test(title);
 
-  const minYear = yearsAvail.length ? yearsAvail[yearsAvail.length - 1] : 1950;
-  const maxYear = yearsAvail.length ? yearsAvail[0] : new Date().getFullYear();
+  // Round-robin caps at 6 books — switch to single-elim if user picks bigger
+  const formatActive = (size > 6 && format === "round_robin") ? DEFAULT_FORMAT : format;
+  const canCreate    = title.trim().length > 0;
 
-  const togglePick = (id) => {
-    setPicked((s) => {
-      const next = new Set(s);
-      if (next.has(id))      next.delete(id);
-      else if (next.size < size) next.add(id);
-      return next;
-    });
+  const onMonthChange = (m) => {
+    setMonth(m);
+    if (titleIsAuto) {
+      setTitle(m == null ? "My Bracket" : `Best of ${FULL[m]} ${year}`);
+    }
   };
 
-  // Round-robin only allowed for ≤6 items; auto-suggest single_elim if size > 6
-  const formatActive = (size > 6 && format === "round_robin") ? DEFAULT_FORMAT : format;
-
-  const canCreate = picked.size === size && title.trim().length > 0 && !loading;
-
   const doCreate = () => {
-    const items = catalog
-      .filter((b) => picked.has(b.id))
-      .map((b) => ({
-        id:      b.id,
-        title:   b.title,
-        author:  (b.creators || [])[0] || "",
-        cover:   b.cover_url || "",
-        rating:  null,
-        external_ids: b.external_ids || {},
-      }));
     const id = createCustomBracket({
       title:  title.trim(),
       year,
-      items,
       format: formatActive,
+      size,
+      month,
+      items:  [],
     });
     onCreated?.(id);
   };
@@ -91,124 +62,86 @@ export default function CustomBracketCreator({ onClose, onCreated }) {
       style={{
         position: "fixed", inset: 0, zIndex: 1200,
         background: "rgba(0,0,0,0.5)", display: "flex",
-        alignItems: "stretch", justifyContent: "center",
+        alignItems: "flex-end", justifyContent: "center",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#f0fdf4", width: "100%", maxWidth: 480,
-          display: "flex", flexDirection: "column", overflow: "hidden",
+          background: "#f0fdf4", borderRadius: "20px 20px 0 0",
+          padding: "20px 16px 24px", width: "100%", maxWidth: 460,
+          boxShadow: "0 -4px 40px rgba(0,0,0,0.15)",
+          display: "flex", flexDirection: "column", gap: 14, maxHeight: "90vh", overflowY: "auto",
         }}
       >
-        {/* ── Header ──────────────────────────────────────────────── */}
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid #e7e5e4", background: "#fff", display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#15803d", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: 0 }}>
-            ✕ Cancel
-          </button>
-          <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#1c1917" }}>New Custom Bracket</div>
-          <div style={{ flex: 1 }} />
-          <div style={{ width: 60 }} />
+        {/* Handle bar */}
+        <div style={{ width: 40, height: 4, borderRadius: 2, background: "#e2e8f0", margin: "0 auto" }} />
+
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontWeight: 800, fontSize: 18, color: "#1c1917" }}>New Bracket</div>
+          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>Set it up — add books inside</div>
         </div>
 
-        {/* ── Scrollable body ─────────────────────────────────────── */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-
-          {/* Year picker */}
-          <div style={{ background: "#fff", borderRadius: 14, padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
-            <button onClick={() => setYear((y) => Math.max(minYear, y - 1))} disabled={year <= minYear}
-              style={{ width: 30, height: 30, borderRadius: 99, border: "1px solid #e7e5e4", background: "#fff", fontSize: 14, cursor: year <= minYear ? "default" : "pointer", color: year <= minYear ? "#d6d3d1" : "#14532d", padding: 0 }}>‹</button>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1.5 }}>Year</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: "#1c1917" }}>{year}</div>
-            </div>
-            <button onClick={() => setYear((y) => Math.min(maxYear, y + 1))} disabled={year >= maxYear}
-              style={{ width: 30, height: 30, borderRadius: 99, border: "1px solid #e7e5e4", background: "#fff", fontSize: 14, cursor: year >= maxYear ? "default" : "pointer", color: year >= maxYear ? "#d6d3d1" : "#14532d", padding: 0 }}>›</button>
-          </div>
-
-          {/* Size + format pills */}
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ flex: 1, background: "#fff", borderRadius: 14, padding: "8px 10px" }}>
-              <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Bracket size</div>
-              <div style={{ display: "flex", gap: 4 }}>
-                {SIZES.map((n) => (
-                  <button key={n} onClick={() => setSize(n)}
-                    style={{ flex: 1, padding: "6px 0", borderRadius: 8, border: "none", background: size === n ? "#14532d" : "#f5f5f4", color: size === n ? "#fff" : "#78716c", fontWeight: 800, fontSize: 13, cursor: "pointer" }}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button onClick={() => setShowFormatSheet(true)}
-              style={{ background: "#fff", border: "none", borderRadius: 14, padding: "8px 12px", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, cursor: "pointer" }}>
-              <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800 }}>Format</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span>{getFormat(formatActive).icon}</span>
-                <span style={{ fontWeight: 800, fontSize: 13, color: "#1c1917" }}>{getFormat(formatActive).label}</span>
-                <span style={{ color: "#a8a29e", fontSize: 10 }}>▾</span>
-              </div>
-            </button>
-          </div>
-
-          {/* Selection counter */}
-          <div style={{ textAlign: "center", padding: "4px 0" }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: picked.size === size ? "#15803d" : "#78716c" }}>
-              {picked.size} of {size} books picked
-            </span>
-          </div>
-
-          {/* Catalog grid */}
-          {loading ? (
-            <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af" }}>Loading catalog…</div>
-          ) : catalog.length === 0 ? (
-            <div style={{ background: "#fff", borderRadius: 14, padding: "24px 16px", textAlign: "center", color: "#78716c", fontSize: 13 }}>
-              No catalog books found for {year}.<br />Try another year.
-            </div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              {catalog.map((b) => {
-                const sel = picked.has(b.id);
-                const disabled = !sel && picked.size >= size;
-                const book = { id: b.id, title: b.title, cover: b.cover_url || "", author: (b.creators||[])[0] || "" };
-                return (
-                  <button key={b.id} onClick={() => togglePick(b.id)} disabled={disabled}
-                    style={{
-                      display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-                      padding: 8, background: sel ? "#f0fdf4" : "#fff",
-                      border: `2px solid ${sel ? "#22c55e" : "#e7e5e4"}`,
-                      borderRadius: 10, cursor: disabled ? "default" : "pointer",
-                      opacity: disabled ? 0.5 : 1, position: "relative",
-                      transition: "all .15s",
-                    }}>
-                    <Cover book={book} size="sm" />
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "#1c1917", textAlign: "center", lineHeight: 1.2, maxHeight: 24, overflow: "hidden" }}>
-                      {b.title}
-                    </div>
-                    {sel && (
-                      <span style={{ position: "absolute", top: 4, right: 4, background: "#22c55e", color: "#fff", borderRadius: 99, width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>
-                        ✓
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ── Footer: title + create ───────────────────────────────── */}
-        <div style={{ borderTop: "1px solid #e7e5e4", background: "#fff", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* Title */}
+        <label style={{ display: "block" }}>
+          <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Title</div>
           <input
-            value={title} onChange={(e) => setTitle(e.target.value)}
-            placeholder="Bracket title"
-            style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Best Sci-Fi 2026"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", background: "#fff" }}
           />
-          <button onClick={doCreate} disabled={!canCreate}
-            style={{ width: "100%", padding: 14, borderRadius: 10, background: canCreate ? "#14532d" : "#d6d3d1", color: "#fff", border: "none", fontWeight: 800, fontSize: 14, cursor: canCreate ? "pointer" : "default" }}>
-            {canCreate ? "Create Bracket" : `Pick ${size - picked.size} more`}
+        </label>
+
+        {/* Size */}
+        <div>
+          <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Bracket size</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {SIZES.map((n) => (
+              <button key={n} onClick={() => setSize(n)}
+                style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: size === n ? "#14532d" : "#fff", color: size === n ? "#fff" : "#78716c", fontWeight: 800, fontSize: 14, cursor: "pointer" }}>
+                {n} books
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Format */}
+        <div>
+          <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Format</div>
+          <button onClick={() => setShowFormatSheet(true)}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 10, background: "#fff", cursor: "pointer", textAlign: "left", fontSize: 14 }}>
+            <span style={{ fontSize: 18 }}>{getFormat(formatActive).icon}</span>
+            <span style={{ fontWeight: 700, color: "#1c1917" }}>{getFormat(formatActive).label}</span>
+            <span style={{ marginLeft: "auto", color: "#a8a29e", fontSize: 12 }}>change ▾</span>
           </button>
         </div>
+
+        {/* Optional month tag */}
+        <div>
+          <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Month tag (optional)</div>
+          <select
+            value={month == null ? "" : String(month)}
+            onChange={(e) => onMonthChange(e.target.value === "" ? null : Number(e.target.value))}
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#fff", fontSize: 14, color: "#1c1917" }}
+          >
+            <option value="">No month — free pick</option>
+            {FULL.map((m, i) => (
+              <option key={m} value={String(i)}>{m} {year}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Create CTA */}
+        <button onClick={doCreate} disabled={!canCreate}
+          style={{ marginTop: 4, width: "100%", padding: 14, borderRadius: 10, background: canCreate ? "#14532d" : "#d6d3d1", color: "#fff", border: "none", fontWeight: 800, fontSize: 15, cursor: canCreate ? "pointer" : "default" }}>
+          Create Bracket
+        </button>
+
+        <button onClick={onClose}
+          style={{ width: "100%", padding: 10, borderRadius: 10, background: "transparent", color: "#78716c", border: "none", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+          Cancel
+        </button>
 
         {showFormatSheet && (
           <BracketFormatSheet

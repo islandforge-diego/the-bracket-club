@@ -29,7 +29,7 @@
  */
 
 const STORAGE_KEY  = "bc_sound_enabled";
-const MASTER_GAIN  = 0.06;
+const MASTER_GAIN  = 0.05;
 const RESET_AFTER  = 30_000;      // ms of inactivity before scale resets
 const ROOT_HZ      = 261.63;      // C4
 const MODULATE_BY  = 7;           // semitones — perfect fifth (circle of fifths)
@@ -113,9 +113,9 @@ function ensureChain(c) {
   const delay   = c.createDelay(1.0);
   delay.delayTime.value = 0.18;
   const fb      = c.createGain();
-  fb.gain.value = 0.32;
+  fb.gain.value = 0.22;                                // toned down: was 0.32
   const wet     = c.createGain();
-  wet.gain.value = 0.22;
+  wet.gain.value = 0.14;                               // toned down: was 0.22
 
   delay.connect(fb);
   fb.connect(delay);

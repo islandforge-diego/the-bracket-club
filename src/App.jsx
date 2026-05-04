@@ -399,46 +399,24 @@ export default function App() {
   if (isDesktop) return (
     <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"system-ui,-apple-system,sans-serif", background:"#f0fdf4" }}>
       <BattleAnimationStyles />
-      {/* ── Desktop sticky header/navbar ── */}
+      {/* ── Desktop sticky header (no nav tabs anymore) ── */}
       <div style={{ background:"#14532d", color:"#fff", padding:"0 32px", height:64, display:"flex", alignItems:"center", gap:0, flexShrink:0, boxShadow:"0 2px 8px #0002", position:"sticky", top:0, zIndex:100 }}>
         <img src="/logo.png" alt="Bracket Club" style={{ height:40, width:40, objectFit:"contain", marginRight:14 }} />
-        <span style={{ fontWeight:800, fontSize:18, letterSpacing:-0.5, marginRight:32 }}>The Bracket Club</span>
-        <div style={{ display:"flex", gap:4 }}>
-          {NAV.map(({ v, icon, lbl }) => (
-            <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }} style={{
-              padding:"8px 18px", border:"none", borderRadius:8, cursor:"pointer",
-              background: view===v ? "rgba(255,255,255,0.18)" : "transparent",
-              color:"#fff", fontWeight: view===v ? 700 : 500, fontSize:14,
-              display:"flex", alignItems:"center", gap:7,
-            }}>
-              <span style={{ fontSize:16 }}>{icon}</span>{lbl}
-            </button>
-          ))}
-        </div>
+        <span style={{ fontWeight:800, fontSize:18, letterSpacing:-0.5 }}>The Bracket Club</span>
         <div style={{ flex:1 }} />
-        {/* AccountButton from CategoryRouter renders here via position:fixed top:14 right:16 */}
+        {/* AccountButton + SoundToggle from CategoryRouter render via position:fixed */}
       </div>
 
       {/* ── Desktop content area ── */}
       <div style={{ flex:1, overflowY:"auto", padding:"32px 40px" }}>
-        {view === "import" ? (
-          <div style={{ maxWidth:700, margin:"0 auto" }}>
-            <Import data={data} save={save} onDone={() => setView("home")} year={year} />
-          </div>
-        ) : view === "home" ? (
-          <Home data={data} save={save} curM={curM} year={year} setYear={setYear}
-            goBracket={() => setView("bracket")} goImport={() => setView("import")}
-            openShare={() => setShowShare(true)} ob={ob} markOb={markOb} isDesktop />
-        ) : (
-          <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
-            year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
-        )}
+        <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
+          year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
       </div>
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
       {!ob.hasSeenWelcome && !loading && (
         <Welcome config={CAT}
-          onStartTour={() => { markOb({ hasSeenWelcome: true }); setView("home"); setTourActive(true); }}
+          onStartTour={() => { markOb({ hasSeenWelcome: true }); setTourActive(true); }}
           onSkip={() => markOb({ hasSeenWelcome: true })} />
       )}
       {tourActive && <Tour config={CAT} setView={setView} onDone={() => setTourActive(false)} />}
@@ -453,44 +431,19 @@ export default function App() {
         <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
       </div>
 
-      {/* Views */}
-      {view === "import" ? (
-        <div style={{ flex:1, height:0, overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-          <Import data={data} save={save} onDone={() => setView("home")} year={year} />
-        </div>
-      ) : (
-        <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd} style={{ flex:1, height:0, overflow:"hidden" }}>
-          <div style={{ display:"flex", width:"200%", height:"100%", transform:`translateX(-${viewIdx*50}%)`, transition:"transform 0.3s ease-out" }}>
-            <div style={{ width:"50%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
-            </div>
-            <div style={{ width:"50%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bottom Nav */}
-      {!hideNav && (
-        <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", zIndex:20 }}>
-          {NAV.map(({ v, icon, lbl }) => (
-            <button
-              key={v}
-              onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
-              style={{ flex:1, padding:"10px 0", display:"flex", flexDirection:"column", alignItems:"center", gap:2, fontSize:11, fontWeight:700, border:"none", background:view===v?"#f0fdf4":"#fff", color:view===v?"#166534":"#9ca3af", cursor:"pointer" }}
-            >
-              <span style={{ fontSize:20 }}>{icon}</span>{lbl}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Single-page: Brackets is the home.  Tabs + Home/Month flow removed.
+          Legacy components (Home, Month, NewReleases, Import) stay in the
+          repo for reference and a possible revert; they're no longer mounted. */}
+      <div style={{ flex:1, height:0, overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+        <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
+          year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+      </div>
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
       {!ob.hasSeenWelcome && !loading && (
         <Welcome
           config={CAT}
-          onStartTour={() => { markOb({ hasSeenWelcome: true }); setView("home"); setTourActive(true); }}
+          onStartTour={() => { markOb({ hasSeenWelcome: true }); }}
           onSkip={() => markOb({ hasSeenWelcome: true })}
         />
       )}
@@ -1640,67 +1593,94 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
 
   const shelfPicks = data.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
+  // Show legacy "My Shelf" only for users who already have shelf data — new
+  // users land on a clean Brackets-only experience.
+  const showShelf  = shelfPicks > 0 || Object.keys(data.bracket || {}).length > 0;
   const customs    = listCustomBrackets();
   void listKey;                                 // dependency for re-render after edits
 
   const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
 
   return (
-    <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
-      <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", textAlign:"center" }}>Brackets</div>
-
-      <div data-tour="bracket-hub" style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        <button onClick={() => { playUI("select"); setMode("shelf"); }} style={cardStyle}>
-          <span style={{ fontSize:28 }}>📚</span>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
-            <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
-              {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
-            </div>
-          </div>
-          <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
-        </button>
-
-        {/* ── Custom (catalog) brackets ──────────────────────────── */}
-        <button onClick={() => { playUI("tap"); setShowCreator(true); }} style={{ ...cardStyle, background:"#f0fdf4", border:"2px dashed #86efac", boxShadow:"none" }}>
-          <span style={{ fontSize:28 }}>✨</span>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:800, fontSize:15, color:"#14532d" }}>Create Custom Bracket</div>
-            <div style={{ fontSize:12, color:"#15803d", marginTop:2 }}>
-              Pick books from any year and crown a champion
-            </div>
-          </div>
-          <span style={{ color:"#22c55e", fontSize:20, fontWeight:800 }}>+</span>
-        </button>
-
-        {customs.length > 0 && (
-          <>
-            <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, fontWeight:800, marginTop:6, paddingLeft:4 }}>
-              Custom brackets
-            </div>
-            {customs.map((cb) => {
-              const totalMatches = cb.format === "round_robin"
-                ? cb.items.length * (cb.items.length - 1) / 2
-                : cb.items.length - 1;
-              const playedMatches = Object.keys(cb.picks || {}).length;
-              return (
-                <button key={cb.id} onClick={() => { playUI("select"); setActiveCustomId(cb.id); }} style={cardStyle}>
-                  <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : "📕"}</span>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      {cb.title}
-                    </div>
-                    <div style={{ fontSize:12, color: cb.winner ? "#15803d" : "#78716c", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      {cb.winner ? `🏆 ${cb.winner.title}` : `${playedMatches}/${totalMatches} matches · ${cb.year} · ${cb.items.length} books`}
-                    </div>
-                  </div>
-                  <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
-                </button>
-              );
-            })}
-          </>
-        )}
+    <div style={{ padding:"16px 16px 24px", display:"flex", flexDirection:"column", gap:14, maxWidth:600, margin:"0 auto" }}>
+      <div style={{ textAlign:"center", paddingTop: 8 }}>
+        <div style={{ fontWeight:800, fontSize:24, color:"#1c1917" }}>Brackets</div>
+        <div style={{ fontSize:12, color:"#9ca3af", marginTop:4 }}>Create one, or jump back in</div>
       </div>
+
+      {/* Primary CTA */}
+      <button onClick={() => { playUI("tap"); setShowCreator(true); }}
+        style={{ ...cardStyle, background:"#14532d", color:"#fff", border:"none", boxShadow:"0 4px 14px rgba(20,83,45,0.25)", padding:"16px 18px" }}>
+        <span style={{ fontSize:28 }}>✨</span>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:800, fontSize:15, color:"#fff" }}>Create a Bracket</div>
+          <div style={{ fontSize:12, color:"rgba(255,255,255,0.75)", marginTop:2 }}>
+            Set it up, then add the books you want to face off
+          </div>
+        </div>
+        <span style={{ fontSize:22, fontWeight:800, color:"#fff" }}>+</span>
+      </button>
+
+      {/* Custom brackets list */}
+      {customs.length === 0 && !showShelf && (
+        <div style={{ background:"#fff", borderRadius:16, padding:"32px 20px", textAlign:"center", color:"#9ca3af", fontSize:13, boxShadow:"0 1px 4px #0001" }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>🏆</div>
+          No brackets yet — tap above to make your first one.
+        </div>
+      )}
+
+      {customs.length > 0 && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {customs.map((cb) => {
+            const filled        = (cb.items?.length || 0) >= (cb.size || 0);
+            const totalMatches  = filled
+              ? (cb.format === "round_robin"
+                  ? cb.items.length * (cb.items.length - 1) / 2
+                  : cb.items.length - 1)
+              : 0;
+            const playedMatches = Object.keys(cb.picks || {}).length;
+            const monthLabel    = cb.month != null ? `${MONTHS[cb.month]} ${cb.year}` : null;
+            const subtitle = cb.winner
+              ? `🏆 ${cb.winner.title}`
+              : !filled
+                ? `${cb.items?.length || 0}/${cb.size} books · adding…`
+                : `${playedMatches}/${totalMatches} matches`;
+            return (
+              <button key={cb.id} onClick={() => { playUI("select"); setActiveCustomId(cb.id); }} style={cardStyle}>
+                <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : !filled ? "📝" : "📕"}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {cb.title}
+                  </div>
+                  <div style={{ fontSize:12, color: cb.winner ? "#15803d" : "#78716c", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {monthLabel ? `${monthLabel} · ` : ""}{subtitle}
+                  </div>
+                </div>
+                <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Legacy My Shelf — only shown for users with existing shelf data */}
+      {showShelf && (
+        <>
+          <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, fontWeight:800, marginTop:8, paddingLeft:4 }}>
+            From your shelf
+          </div>
+          <button onClick={() => { playUI("select"); setMode("shelf"); }} style={cardStyle}>
+            <span style={{ fontSize:28 }}>📚</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
+              <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
+                {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
+              </div>
+            </div>
+            <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+          </button>
+        </>
+      )}
 
       {showCreator && (
         <CustomBracketCreator
