@@ -20,6 +20,7 @@ import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import ItemSearch from "./ItemSearch.jsx";
+import GoodreadsImporter from "./GoodreadsImporter.jsx";
 import { buildBracket, getBracketWinner } from "./bracket.js";
 import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale, playStar } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT, getFormat } from "./bracketFormats.js";
@@ -56,6 +57,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
   const [bracket, setBracket]       = useState(() => getCustomBracket(bracketId));
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showVictory,   setShowVictory]   = useState(false);
+  const [showImporter,  setShowImporter]  = useState(false);
   const prevWinnerRef = useRef(bracket?.winner);
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeStart = useRef(null);
@@ -149,6 +151,25 @@ export default function CustomBracketView({ bracketId, onBack }) {
     playUI("back");
   };
 
+  // Bulk add — used by GoodreadsImporter.  Caps at the bracket's remaining
+  // capacity so we never overflow `size` even if caller passes too many.
+  const addBooks = (incoming) => {
+    if (!incoming?.length) return;
+    const remaining = size - (bracket.items?.length || 0);
+    const additions = incoming.slice(0, remaining).map((b) => ({
+      id:            `bk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title:         (b.title || "").trim(),
+      author:        (b.author || "").trim(),
+      cover:         (b.cover  || "").trim(),
+      description:   b.description || null,
+      rating:        b.rating || null,
+      genres:        b.genres || [],
+    })).filter((b) => b.title);
+    if (additions.length === 0) return;
+    persist({ items: [...bracket.items, ...additions] });
+    playStar();
+  };
+
   // ── Header (shared across format branches) ───────────────────────────
   const Header = (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#fff", borderBottom: "1px solid #e7e5e4" }}>
@@ -214,6 +235,17 @@ export default function CustomBracketView({ bracketId, onBack }) {
             }}
           />
 
+          {/* Bulk import from Goodreads */}
+          <button onClick={() => { playUI("tap"); setShowImporter(true); }}
+            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+            <span style={{ fontSize: 18 }}>📚</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917" }}>Import from Goodreads</div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>Pull from your read shelf and pick</div>
+            </div>
+            <span style={{ color: "#a8a29e", fontSize: 16 }}>›</span>
+          </button>
+
           {/* Currently-added books */}
           {bracket.items.length === 0 ? (
             <div style={{ background: "#fff", borderRadius: 14, padding: "28px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
@@ -252,6 +284,14 @@ export default function CustomBracketView({ bracketId, onBack }) {
             🗑️  Delete this bracket
           </button>
         </div>
+
+        {showImporter && (
+          <GoodreadsImporter
+            maxToAdd={size - bracket.items.length}
+            onImport={(picked) => { addBooks(picked); setShowImporter(false); }}
+            onClose={() => setShowImporter(false)}
+          />
+        )}
       </>
     );
   }
