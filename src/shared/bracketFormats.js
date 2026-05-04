@@ -29,9 +29,10 @@ export const BRACKET_FORMATS = [
   {
     id:          "round_robin",
     label:       "Round-robin",
-    sub:         "Every book vs every other.  Most wins is champion.",
+    sub:         "Every book vs every other — most wins is champion.  Monthly only (annual stays knockout).",
     icon:        "🔁",
-    available:   false,
+    available:   true,
+    monthlyOnly: true,
   },
   {
     id:          "double_elim",

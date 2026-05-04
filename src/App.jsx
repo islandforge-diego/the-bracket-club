@@ -21,6 +21,7 @@ import { MONTHS, FULL, COLORS, R1, R2, MATCHES } from "./shared/constants.js";
 import { buildBracket, getBracketWinner, isMatchEmpty, getR1Winner, getMatchItems } from "./shared/bracket.js";
 import { applySeeding, DEFAULT_FORMAT, getFormat } from "./shared/bracketFormats.js";
 import BracketFormatSheet from "./shared/BracketFormatSheet.jsx";
+import RoundRobinView    from "./shared/RoundRobinView.jsx";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -1046,6 +1047,57 @@ function Month({ data, save, idx, setIdx, onBack }) {
           </div>
         )}
       </div>
+      </>
+    );
+  }
+
+  // ── Monthly round-robin overview ──
+  // Round-robin replaces the knockout grid for 2+ books when format is set.
+  // Cap at 6 items so we don't generate 28+ matches (8 items = 28 matches);
+  // larger months silently fall back to knockout below.
+  if (showBracket && m.books.length >= 2 && m.books.length <= 6 && (data.bracketFormat === "round_robin")) {
+    const seededBooks = applySeeding(m.books, data.bracketFormat);  // no-op for round_robin, but keeps the door open
+    const monthVote2 = (matchId, book) => {
+      const nd = { ...data };
+      nd.months = [...nd.months];
+      const newPicks = { ...monthPicks, [matchId]: book };
+      nd.months[idx] = { ...m, bracketPicks: newPicks };
+      save(nd);
+      track(user?.id, EVENT.BRACKET_PICK, { type: "slot_round_robin", slot: idx, match_id: matchId });
+    };
+    const onChampion = (champ) => {
+      // Only fire if not already crowned (parent state stays in sync via m.winner)
+      if (m.winner?.id === champ.id) return;
+      const nd = { ...data };
+      nd.months = [...nd.months];
+      nd.months[idx] = { ...m, winner: champ };
+      save(nd);
+      track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "round_robin" });
+    };
+    const onResetRR = () => {
+      if (!confirm("Reset this month's round-robin?")) return;
+      const nd = { ...data };
+      nd.months = [...nd.months];
+      nd.months[idx] = { ...m, bracketPicks: {}, winner: null };
+      save(nd);
+    };
+    return (
+      <>
+        {monthVictoryOverlay}
+        <div>
+          <button onClick={() => setShowBracket(false)}
+            style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:"16px 16px 0" }}>
+            ‹ Back to {FULL[idx]}
+          </button>
+          <RoundRobinView
+            items={seededBooks}
+            picks={monthPicks}
+            onVote={monthVote2}
+            onChampion={onChampion}
+            onReset={onResetRR}
+            monthLabel={FULL[idx]}
+          />
+        </div>
       </>
     );
   }
