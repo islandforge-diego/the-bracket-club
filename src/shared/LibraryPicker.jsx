@@ -1,10 +1,10 @@
 /**
- * LibraryPicker — multi-select modal that pulls from the user's library
+ * LibraryPicker — multi-select modal that pulls from the user's shelves
  * into the active bracket.
  *
- * Identical pattern to GoodreadsImporter but the source is local rather
- * than network — instant load, no auth.  Caps at the bracket's remaining
- * capacity so we never overflow size.
+ * Aggregates books across every shelf (deduplicated by fingerprint).  An
+ * extra `_shelfName` field on each row surfaces which shelf each book
+ * lives in, so the user can spot duplicates by context.
  *
  * Props
  *   maxToAdd  number of slots remaining in the bracket
@@ -15,10 +15,10 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import Cover from "./Cover.jsx";
-import { listLibrary } from "./userLibrary.js";
+import { listAllBooks } from "./userShelves.js";
 
 export default function LibraryPicker({ maxToAdd, onImport, onClose }) {
-  const books = listLibrary();
+  const books = listAllBooks();
   const [selected, setSelected] = useState(new Set());
   const [filter,   setFilter]   = useState("");
 
@@ -64,8 +64,8 @@ export default function LibraryPicker({ maxToAdd, onImport, onClose }) {
             ✕ Close
           </button>
           <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ fontWeight: 800, fontSize: 14, color: "#1c1917" }}>Pick from Library</div>
-            <div style={{ fontSize: 10, color: "#9ca3af" }}>{books.length} {books.length === 1 ? "book" : "books"} saved</div>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#1c1917" }}>Pick from My Shelves</div>
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>{books.length} {books.length === 1 ? "book" : "books"} across all shelves</div>
           </div>
           <div style={{ width: 50 }} />
         </div>
@@ -74,7 +74,7 @@ export default function LibraryPicker({ maxToAdd, onImport, onClose }) {
           {books.length === 0 ? (
             <div style={{ background: "#fff", borderRadius: 12, padding: "32px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
               <div style={{ fontSize: 32, marginBottom: 6 }}>📚</div>
-              Your library is empty.<br />Add books in the Library tab first.
+              No books saved yet.<br />Add some in the My Shelves tab first.
             </div>
           ) : (
             <>

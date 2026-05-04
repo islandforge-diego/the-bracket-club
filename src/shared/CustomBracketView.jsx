@@ -24,7 +24,7 @@ import GoodreadsImporter from "./GoodreadsImporter.jsx";
 import CSVImporter       from "./CSVImporter.jsx";
 import PasteListImporter from "./PasteListImporter.jsx";
 import LibraryPicker from "./LibraryPicker.jsx";
-import { addToLibrary, addManyToLibrary, librarySize } from "./userLibrary.js";
+import { addToAutoShelf, addManyToAutoShelf, totalBookCount } from "./userShelves.js";
 import { buildBracket, getBracketWinner } from "./bracket.js";
 import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale, playStar } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT, getFormat } from "./bracketFormats.js";
@@ -150,9 +150,9 @@ export default function CustomBracketView({ bracketId, onBack }) {
       rating:        null,
     };
     persist({ items: [...bracket.items, newBook] });
-    // Mirror into the user's library so the same book is one tap away in
-    // future brackets.  No-op if it's already saved.
-    addToLibrary(book, "bracket");
+    // Mirror into the user's "From Brackets" shelf so the same book is one
+    // tap away in future brackets.  No-op if it's already saved there.
+    addToAutoShelf(book);
     playStar();                                          // little sparkle on add
   };
 
@@ -177,7 +177,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
     })).filter((b) => b.title);
     if (additions.length === 0) return;
     persist({ items: [...bracket.items, ...additions] });
-    addManyToLibrary(incoming, "bracket");
+    addManyToAutoShelf(incoming);
     playStar();
   };
 
@@ -246,13 +246,13 @@ export default function CustomBracketView({ bracketId, onBack }) {
             }}
           />
 
-          {/* Pick from your library — only useful once they have one */}
-          {librarySize() > 0 && (
+          {/* Pick from any shelf — only useful once they have books somewhere */}
+          {totalBookCount() > 0 && (
             <button onClick={() => { playUI("tap"); setShowLibrary(true); }}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #86efac", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
               <span style={{ fontSize: 18 }}>📖</span>
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#14532d" }}>Pick from My Library</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#14532d" }}>Pick from My Shelves</div>
                 <div style={{ fontSize: 11, color: "#15803d", marginTop: 1 }}>Quick-add from books you've saved</div>
               </div>
               <span style={{ color: "#a8a29e", fontSize: 16 }}>›</span>

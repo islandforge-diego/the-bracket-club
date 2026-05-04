@@ -29,7 +29,8 @@ import { listCustomBrackets, createCustomBracket, deleteCustomBracket, updateCus
 import { COMMUNITY_BRACKETS, getCommunityBracket } from "./shared/communityBrackets.js";
 import { getPrefs, scoreForUser } from "./shared/userPreferences.js";
 import LoginModal from "./lib/LoginModal.jsx";
-import LibraryPage from "./shared/LibraryPage.jsx";
+import MyShelvesPage from "./shared/MyShelvesPage.jsx";
+import ShelfDetailPage from "./shared/ShelfDetailPage.jsx";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -237,7 +238,12 @@ export default function App() {
   const { user } = useAuth();
   const [data,     setData]     = useState(null);
   const [loading,  setLoading]  = useState(true);
-  const [view,     setView]     = useState("bracket");
+  const [view,     setView]     = useState("shelves");
+  // When the user opens a shelf, we stash the id here.  Showing the detail
+  // page is independent of the active tab — staying inside one shelf while
+  // switching to the Brackets tab and back should be possible too, but for
+  // simplicity we close detail when the user switches tabs.
+  const [activeShelfId, setActiveShelfId] = useState(null);
   const [battleId, setBattleId] = useState(null);
   const [year,     setYear]     = useState(new Date().getFullYear());
   const [showShare, setShowShare] = useState(false);
@@ -334,17 +340,18 @@ export default function App() {
     queueSync(nd);
   };
 
-  // Two-tab nav: Brackets (default) + Library (the user's saved books).
-  // The Home/Month flow + New Releases tab stay unmounted but in the repo
-  // for revert safety.  See git log for that retired structure.
+  // Two-tab nav.  My Shelves is on the LEFT and is the default home —
+  // think of it as the user's bookshelf they manage day-to-day, with
+  // Brackets on the right for when they want to play.  Order matters:
+  // VIEWS[0] is what fresh launches land on.
   const NAV = [
-    { v:"bracket", icon:"🏆", lbl:"Brackets" },
-    { v:"library", icon:"📚", lbl:"Library"  },
+    { v:"shelves", icon:"📚", lbl:"My Shelves" },
+    { v:"bracket", icon:"🏆", lbl:"Brackets"   },
   ];
 
-  const VIEWS = ["bracket", "library"];
-  // Fall back to 0 (Brackets) for any unknown view — guards against stale
-  // state from older versions where view could be "home" / "popular".
+  const VIEWS = ["shelves", "bracket"];
+  // Fall back to 0 (Shelves) for any unknown view — guards against stale
+  // state from older versions where view could be "home" / "library" / etc.
   const viewIdx = view === "import" ? 0 : Math.max(0, VIEWS.indexOf(view));
   const swipeRef = useRef(null);
 
@@ -386,8 +393,10 @@ export default function App() {
 
       {/* ── Desktop content area ── */}
       <div style={{ flex:1, overflowY:"auto", padding:"32px 40px" }}>
-        {view === "library" ? (
-          <LibraryPage />
+        {view === "shelves" ? (
+          activeShelfId
+            ? <ShelfDetailPage shelfId={activeShelfId} onBack={() => setActiveShelfId(null)} />
+            : <MyShelvesPage onOpenShelf={(id) => setActiveShelfId(id)} />
         ) : (
           <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
             year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
@@ -397,7 +406,7 @@ export default function App() {
       {/* Desktop bottom-nav (matches mobile so users can switch tabs) */}
       <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", justifyContent:"center", gap:8, padding:"6px 0" }}>
         {NAV.map(({ v, icon, lbl }) => (
-          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
+          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setActiveShelfId(null); setView(v); }}
             style={{ padding:"8px 22px", display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700, border:"none",
               background: view === v ? "#f0fdf4" : "transparent",
               borderRadius:8,
@@ -425,11 +434,13 @@ export default function App() {
         <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
       </div>
 
-      {/* Two tabs: Brackets + Library.  Legacy Home/Month/NewReleases code
-          stays in the repo for reference; not mounted. */}
+      {/* Two tabs: My Shelves (left/default) + Brackets.  Legacy Home/Month/
+          NewReleases/flat-Library code stays in the repo for reference. */}
       <div style={{ flex:1, height:0, overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-        {view === "library" ? (
-          <LibraryPage />
+        {view === "shelves" ? (
+          activeShelfId
+            ? <ShelfDetailPage shelfId={activeShelfId} onBack={() => setActiveShelfId(null)} />
+            : <MyShelvesPage onOpenShelf={(id) => setActiveShelfId(id)} />
         ) : (
           <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
             year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
@@ -439,7 +450,7 @@ export default function App() {
       {/* Bottom nav */}
       <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", zIndex:20 }}>
         {NAV.map(({ v, icon, lbl }) => (
-          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
+          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setActiveShelfId(null); setView(v); }}
             style={{ flex:1, padding:"10px 0", display:"flex", flexDirection:"column", alignItems:"center", gap:2, fontSize:11, fontWeight:700, border:"none",
               background: view === v ? "#f0fdf4" : "#fff",
               color: view === v ? "#166534" : "#9ca3af", cursor:"pointer" }}>
