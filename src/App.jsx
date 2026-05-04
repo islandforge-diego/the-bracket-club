@@ -1589,14 +1589,6 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
   // listKey forces a re-evaluation without expensive subscription wiring.
   const [listKey, setListKey] = useState(0);
 
-  if (mode === "shelf") {
-    return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
-  }
-
-  if (activeCustomId) {
-    return <CustomBracketView bracketId={activeCustomId} onBack={() => { setActiveCustomId(null); setListKey((k) => k + 1); }} />;
-  }
-
   // Fork a community bracket into the user's local custom-brackets store.
   // Returns the new id.  If the user already has a fork of this preset, just
   // reuse it instead of creating a duplicate.
@@ -1619,22 +1611,14 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
     });
   };
 
-  // Open a community bracket: account-gate first, then fork + open.
-  const openCommunityBracket = (preset) => {
-    if (!user) {
-      setPendingPresetId(preset.id);
-      setShowLogin(true);
-      return;
-    }
-    playUI("select");
-    const id = forkCommunityBracket(preset);
-    setListKey((k) => k + 1);
-    setActiveCustomId(id);
-  };
-
   // After LoginModal closes, if the user is now signed in, complete the
   // pending community-bracket open.  Tracked via React effect on the user
   // object so it survives the Google OAuth round-trip.
+  //
+  // CRITICAL: this useEffect MUST live above the conditional returns below
+  // — React's rules-of-hooks require hook calls in the same order every
+  // render.  Putting it after `if (mode === "shelf") return …` would skip
+  // the hook on those renders and crash the component (blank page).
   useEffect(() => {
     if (user && pendingPresetId) {
       const preset = getCommunityBracket(pendingPresetId);
@@ -1647,6 +1631,27 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  if (mode === "shelf") {
+    return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
+  }
+
+  if (activeCustomId) {
+    return <CustomBracketView bracketId={activeCustomId} onBack={() => { setActiveCustomId(null); setListKey((k) => k + 1); }} />;
+  }
+
+  // Open a community bracket: account-gate first, then fork + open.
+  const openCommunityBracket = (preset) => {
+    if (!user) {
+      setPendingPresetId(preset.id);
+      setShowLogin(true);
+      return;
+    }
+    playUI("select");
+    const id = forkCommunityBracket(preset);
+    setListKey((k) => k + 1);
+    setActiveCustomId(id);
+  };
 
   const shelfPicks = data.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
@@ -1762,15 +1767,27 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
 
 // ─── Community Brackets section ──────────────────────────────────────────────
 //
-// Renders the curated COMMUNITY_BRACKETS list, sorted by how well each
-// matches the user's saved genre prefs.  Brackets the user has already forked
-// get an "in progress" badge and link to their personal copy.
+// Renders the curated COMMUNITY_BRACKETS list.  When the user has set genre
+// prefs, filter to brackets whose tags intersect their prefs (with a min
+// floor so taste profiles aren't completely starved).  Without prefs, show
+// all brackets in their authored order.
 function CommunityBracketsSection({ prefs, forkedPresetIds, onOpen }) {
-  // Score, then stable-sort by score desc.  No prefs → original order.
-  const sorted = COMMUNITY_BRACKETS
-    .map((b, idx) => ({ b, idx, score: scoreForUser(b, prefs.genres) }))
-    .sort((a, b) => b.score - a.score || a.idx - b.idx)
-    .map((x) => x.b);
+  const userGenres = prefs.genres || [];
+  const hasPrefs   = userGenres.length > 0;
+
+  // Score every bracket, sort high→low.  When the user has prefs, drop
+  // brackets that score 0 (no tag overlap) — but keep at least 4 visible
+  // so users with niche tastes still see SOMETHING beyond their picks.
+  const scored = COMMUNITY_BRACKETS
+    .map((b, idx) => ({ b, idx, score: scoreForUser(b, userGenres) }))
+    .sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+  let visible = scored;
+  if (hasPrefs) {
+    const matched = scored.filter((s) => s.score > 0);
+    visible = matched.length >= 4 ? matched : scored.slice(0, 4);
+  }
+  const sorted = visible.map((x) => x.b);
 
   return (
     <>
@@ -1778,7 +1795,7 @@ function CommunityBracketsSection({ prefs, forkedPresetIds, onOpen }) {
         <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, fontWeight:800 }}>
           Community Brackets
         </div>
-        {prefs.genres?.length > 0 && (
+        {hasPrefs && (
           <span style={{ fontSize:10, color:"#15803d", fontWeight:700, background:"#dcfce7", borderRadius:99, padding:"2px 8px" }}>
             ✨ Picked for you
           </span>

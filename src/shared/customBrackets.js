@@ -70,12 +70,12 @@ export function getCustomBracket(id) {
  * `items` is optional and defaults to [] — books get added INSIDE the
  * bracket via the new add-books mode in CustomBracketView.
  */
-export function createCustomBracket({ title, year, items = [], format, size = 8, month = null }) {
+export function createCustomBracket({ title, year, items = [], format, size = 8, month = null, presetId = null }) {
   const id   = `cb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const now  = new Date().toISOString();
   const all  = readAll();
   all[id] = {
-    id, title, year, items, format, size, month,
+    id, title, year, items, format, size, month, presetId,
     picks:     {},
     winner:    null,
     createdAt: now,
