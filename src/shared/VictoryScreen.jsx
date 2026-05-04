@@ -12,57 +12,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Cover from "./Cover.jsx";
+import { playVictoryInKey } from "./soundscape.js";
 
 const CONFETTI_COLORS = ["#fbbf24", "#22c55e", "#3b82f6", "#ec4899", "#a855f7", "#ef4444", "#06b6d4"];
 const CONFETTI_COUNT  = 80;
-
-/**
- * Synthesize a short victory chime via the Web Audio API.
- *
- * Plays a C-major arpeggio (C5 → E5 → G5 → C6) with a triangle-wave timbre
- * and a quick attack / slow release envelope so it sounds like a celebratory
- * harp pluck.  No external audio assets needed.
- *
- * Wrapped in try/catch by callers — older browsers or autoplay-blocked
- * contexts silently no-op.
- */
-function playVictoryChime() {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) return;
-  const ctx = new AC();
-
-  // C major → 4 ascending notes (Hz).  Slight overlap so they ring together.
-  const notes = [
-    { freq: 523.25, when: 0.00, dur: 0.40 },   // C5
-    { freq: 659.25, when: 0.10, dur: 0.40 },   // E5
-    { freq: 783.99, when: 0.20, dur: 0.40 },   // G5
-    { freq: 1046.5, when: 0.30, dur: 0.80 },   // C6 — held longer for triumph
-  ];
-
-  const master = ctx.createGain();
-  master.gain.value = 0.18;                    // overall volume — gentle, not jarring
-  master.connect(ctx.destination);
-
-  const t0 = ctx.currentTime;
-  for (const n of notes) {
-    const osc = ctx.createOscillator();
-    const env = ctx.createGain();
-    osc.type = "triangle";
-    osc.frequency.value = n.freq;
-    // ADSR-ish: instant attack, slow release
-    env.gain.setValueAtTime(0.0001, t0 + n.when);
-    env.gain.exponentialRampToValueAtTime(1.0, t0 + n.when + 0.02);
-    env.gain.exponentialRampToValueAtTime(0.0001, t0 + n.when + n.dur);
-    osc.connect(env);
-    env.connect(master);
-    osc.start(t0 + n.when);
-    osc.stop(t0 + n.when + n.dur + 0.02);
-  }
-
-  // Auto-close the context after the longest note finishes so we don't leak
-  // audio resources across many crownings in a session.
-  setTimeout(() => ctx.close().catch(() => {}), 1500);
-}
 
 export default function VictoryScreen({ book, title = "Champion", subtitle, onClose, onShare }) {
   const [entering, setEntering] = useState(true);
@@ -76,11 +29,11 @@ export default function VictoryScreen({ book, title = "Champion", subtitle, onCl
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate([15, 60, 25]);
       }
-      // Synth victory chime — no asset needed, generated via Web Audio API.
-      // Safe to ignore if the browser blocks audio (autoplay policy without
-      // user gesture).  The crowning *is* a user gesture (a click), so this
-      // runs reliably on every modern browser.
-      try { playVictoryChime(); } catch { /* ignore audio failures */ }
+      // Victory chime in whatever key the soundscape progression has reached.
+      // Same melody (I-iii-V-I8 triad arpeggio) as before, but now harmonically
+      // continuous with the user's tap progression.  Safe to ignore on browsers
+      // that block audio without a gesture — the crown click IS the gesture.
+      try { playVictoryInKey(); } catch { /* ignore audio failures */ }
       audioFired.current = true;
     }
     return () => clearTimeout(t);

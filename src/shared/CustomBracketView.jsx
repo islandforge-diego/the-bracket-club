@@ -20,7 +20,7 @@ import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import { buildBracket, getBracketWinner } from "./bracket.js";
-import { playUI } from "./soundscape.js";
+import { playUI, playBattleStart } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT } from "./bracketFormats.js";
 import { getCustomBracket, updateCustomBracket, deleteCustomBracket } from "./customBrackets.js";
 
@@ -278,7 +278,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
                   const locked = !winner && !ready;
                   const canClick = ready || !!winner;
                   return (
-                    <button key={match.id} onClick={() => canClick ? setActiveMatchId(match.id) : null}
+                    <button key={match.id} onClick={() => { if (canClick) { if (ready) playBattleStart(); else playUI("tap"); setActiveMatchId(match.id); } }}
                       style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "10px 4px", background: winner ? "#f0fdf4" : "#fff", border: locked ? "2px dashed #e7e5e4" : `2px solid ${winner ? "#22c55e" : "#e7e5e4"}`, borderRadius: 12, cursor: canClick ? "pointer" : "default", opacity: locked ? 0.4 : 1, transition: "all .2s" }}>
                       {winner ? (
                         <>

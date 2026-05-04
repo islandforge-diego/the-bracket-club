@@ -22,7 +22,7 @@
 import { useState, useRef } from "react";
 import Cover from "./Cover.jsx";
 import { buildRoundRobin, computeStandings, roundRobinProgress, isRoundRobinComplete } from "./roundRobin.js";
-import { playUI } from "./soundscape.js";
+import { playUI, playBattleStart } from "./soundscape.js";
 
 export default function RoundRobinView({ items, picks, onVote, onChampion, onReset, monthLabel }) {
   const [activeMatchId, setActiveMatchId] = useState(null);
@@ -174,7 +174,7 @@ export default function RoundRobinView({ items, picks, onVote, onChampion, onRes
             const winner = picks[m.id];
             const loserId = winner ? (winner.id === m.a?.id ? m.b?.id : m.a?.id) : null;
             return (
-              <button key={m.id} onClick={() => setActiveMatchId(m.id)}
+              <button key={m.id} onClick={() => { if (!picks[m.id]) playBattleStart(); else playUI("tap"); setActiveMatchId(m.id); }}
                 style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 4px", background: winner ? "#f0fdf4" : "#fff", border: `2px solid ${winner ? "#22c55e" : "#e7e5e4"}`, borderRadius:10, cursor:"pointer", transition:"all .2s" }}>
                 {winner ? (
                   <>

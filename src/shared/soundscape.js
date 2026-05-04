@@ -95,8 +95,8 @@ function freqFor(scaleIdx, octave = 0, extraSemis = 0) {
 }
 
 /** Schedule a single voice (osc + envelope) into the destination. */
-function playVoice(c, freq, type, attack, dur, gain, dest) {
-  const t   = c.currentTime;
+function playVoice(c, freq, type, attack, dur, gain, dest, startAt) {
+  const t   = startAt ?? c.currentTime;
   const osc = c.createOscillator();
   const env = c.createGain();
   osc.type = type;
@@ -152,4 +152,94 @@ export function resetSoundscape() {
   degree = 0;
   keyOffset = 0;
   lastNoteAt = 0;
+}
+
+// ─── Special sounds: melodies in the *current* key ──────────────────────────
+//
+// These don't advance the per-tap soundscape progression — they reference
+// the *existing* keyOffset so they stay harmonically related to whatever
+// the user has been tapping.  Used for moments bigger than a single tap:
+// crowning a champion, starting a battle, the very first welcome on load.
+//
+// Note shape: { d: scaleDegree, o: octave, dur?: seconds }
+//   - d: 0..6 indexes into MAJOR_SCALE (0=root, 2=third, 4=fifth, …)
+//   - o: 1 = base octave (C5 in C major), 2 = octave up, etc.
+//   - dur: optional length override (defaults to opts.dur)
+
+/**
+ * Play a sequence of scale-degree notes in the current key.  Notes play
+ * sequentially with `gap` seconds between starts.  Cumulative ringing is
+ * intentional — it builds chord-like resonance.
+ */
+export function playMelody(notes, opts = {}) {
+  if (muted) return;
+  const c = ensureCtx();
+  if (!c) return;
+  if (c.state === "suspended") c.resume().catch(() => {});
+
+  const type    = opts.type    || "triangle";
+  const dur     = opts.dur     || 0.30;
+  const gap     = opts.gap     || 0.12;
+  const gain    = opts.gain    || 1.0;
+  const attack  = opts.attack  || 0.005;
+
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = MASTER_GAIN * gain;
+  master.connect(c.destination);
+
+  notes.forEach((n, i) => {
+    const d = n.d ?? 0;
+    const o = n.o ?? 1;
+    const noteDur = n.dur ?? dur;
+    const noteGain = n.gain ?? 0.85;
+    const freq = freqFor(d, o);
+    playVoice(c, freq, type, attack, noteDur, noteGain, master, t0 + i * gap);
+  });
+
+  // Auto-close context after the longest note finishes (only if not actively
+  // playing UI sounds — but those create their own short-lived contexts via
+  // playUI, so this is a no-op for them).  Skip auto-close to keep the
+  // single shared context alive for subsequent calls.
+}
+
+/** Sparkly triad — used when starring a book to crown the month. */
+export function playStar() {
+  playMelody(
+    [{ d: 0, o: 1 }, { d: 2, o: 1 }, { d: 4, o: 1 }, { d: 0, o: 2, dur: 0.45 }],
+    { type: "triangle", dur: 0.18, gap: 0.08, gain: 1.1 },
+  );
+}
+
+/** Dramatic 3-note rising fanfare — when entering a 1v1 battle screen. */
+export function playBattleStart() {
+  playMelody(
+    [
+      { d: 0, o: 1, dur: 0.22 },         // root
+      { d: 4, o: 1, dur: 0.22 },         // fifth
+      { d: 0, o: 2, dur: 0.55, gain: 0.95 }, // octave up, held longer
+    ],
+    { type: "triangle", gap: 0.18, gain: 1.0 },
+  );
+}
+
+/** Bracket champion crowned — full triad + octave, longer notes. */
+export function playVictoryInKey() {
+  playMelody(
+    [
+      { d: 0, o: 1, dur: 0.40 },
+      { d: 2, o: 1, dur: 0.40 },
+      { d: 4, o: 1, dur: 0.40 },
+      { d: 0, o: 2, dur: 0.85 },
+    ],
+    { type: "triangle", gap: 0.10, gain: 1.0 },
+  );
+}
+
+/** Soft welcome chime — fired on the user's first gesture each session. */
+export function playWelcome() {
+  playMelody(
+    [{ d: 0, o: 1 }, { d: 2, o: 1 }, { d: 4, o: 1 }],
+    { type: "sine", dur: 0.40, gap: 0.18, gain: 0.7 },
+  );
 }

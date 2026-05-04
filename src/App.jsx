@@ -35,7 +35,7 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import VictoryScreen   from "./shared/VictoryScreen.jsx";
-import { playUI, isMuted, setMuted } from "./shared/soundscape.js";
+import { playUI, isMuted, setMuted, playStar, playBattleStart, playWelcome } from "./shared/soundscape.js";
 import { useAuth } from "./lib/AuthContext.jsx";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
@@ -244,6 +244,29 @@ export default function App() {
     const fn = () => setIsDesktop(window.innerWidth > 768);
     window.addEventListener('resize', fn);
     return () => window.removeEventListener('resize', fn);
+  }, []);
+
+  // Welcome chime: plays once per session on the user's first interaction.
+  // Browsers block audio without a gesture, so we wait for any pointerdown
+  // anywhere on the document, fire the chime, then remove the listener.
+  useEffect(() => {
+    let fired = false;
+    const onFirstGesture = () => {
+      if (fired) return;
+      fired = true;
+      playWelcome();
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart",   onFirstGesture);
+      window.removeEventListener("keydown",      onFirstGesture);
+    };
+    window.addEventListener("pointerdown", onFirstGesture, { once: false });
+    window.addEventListener("touchstart",   onFirstGesture, { once: false });
+    window.addEventListener("keydown",      onFirstGesture, { once: false });
+    return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart",   onFirstGesture);
+      window.removeEventListener("keydown",      onFirstGesture);
+    };
   }, []);
 
   const markOb = (updates) => setOb(setOnboarding(updates));
@@ -844,7 +867,16 @@ function Month({ data, save, idx, setIdx, onBack }) {
     const alreadyStarred = m.winner?.id === book.id;
     nd.months[idx] = { ...m, winner: alreadyStarred ? null : book };
     save(nd);
-    if (!alreadyStarred) track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "star" });
+    if (!alreadyStarred) {
+      // Sparkly triad — this is the user's monthly favourite, deserves more
+      // ceremony than a generic "commit" tap (but still smaller than the
+      // full bracket VictoryScreen).
+      playStar();
+      track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "star" });
+    } else {
+      // Un-starring → soft regress to acknowledge the action without celebration
+      playUI("back");
+    }
   };
 
   // Find the next ready monthly matchup (no winner yet, both contenders set).
@@ -1065,6 +1097,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
                 nd.months = [...nd.months];
                 nd.months[idx] = { ...m, winner: won ? null : book };
                 save(nd);
+                if (won) playUI("back"); else playStar();
               }}
                 style={{ flex:1, maxWidth:140, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.4:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
                 <Cover book={book} size="lg" />
@@ -1202,7 +1235,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
                   return (
                     <button key={match.id}
-                      onClick={() => canClick ? setMonthBattle(match.id) : null}
+                      onClick={() => { if (canClick) { playBattleStart(); setMonthBattle(match.id); } }}
                       style={{
                         display:"flex", flexDirection:"column", alignItems:"center", gap:4,
                         padding:"10px 4px",
@@ -2030,7 +2063,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
               return (
                 <button key={match.id}
-                  onClick={() => ready ? setBattleId(match.id) : (winner && setBattleId(match.id))}
+                  onClick={() => { if (ready || winner) { if (ready) playBattleStart(); else playUI("tap"); setBattleId(match.id); } }}
                   style={{
                     display:"flex", flexDirection:"column", alignItems:"center", gap:4,
                     padding:"10px 4px", background: (winner || advancee) ? "#f0fdf4" : "#fff",
@@ -2089,7 +2122,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
               return (
                 <button key={match.id}
-                  onClick={() => ready ? setBattleId(match.id) : (winner && setBattleId(match.id))}
+                  onClick={() => { if (ready || winner) { if (ready) playBattleStart(); else playUI("tap"); setBattleId(match.id); } }}
                   style={{
                     display:"flex", flexDirection:"column", alignItems:"center", gap:4,
                     padding:"10px 6px", background: (winner || advancee) ? "#f0fdf4" : "#fff",
