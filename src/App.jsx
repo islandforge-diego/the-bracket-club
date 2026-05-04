@@ -19,6 +19,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─── Shared modules ──────────────────────────────────────────────────────────
 import { MONTHS, FULL, COLORS, R1, R2, MATCHES } from "./shared/constants.js";
 import { buildBracket, getBracketWinner, isMatchEmpty, getR1Winner, getMatchItems } from "./shared/bracket.js";
+import { applySeeding, DEFAULT_FORMAT, getFormat } from "./shared/bracketFormats.js";
+import BracketFormatSheet from "./shared/BracketFormatSheet.jsx";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -44,8 +46,8 @@ import { generateMonthlyCard, generateTop3Card, generateBOTYCard } from "./categ
 const store = createStore("botb_");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-function getBooks(match, months, bracket) {
-  return getMatchItems(match, months, bracket, R1);
+function getBooks(match, months, bracket, r1Source = R1) {
+  return getMatchItems(match, months, bracket, r1Source);
 }
 
 
@@ -832,7 +834,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
     const newPicks = { ...monthPicks, [matchId]: book };
     nd.months[idx] = { ...m, bracketPicks: newPicks };
 
-    const bracket = buildBracket(m.books);
+    const bracket = buildBracket(applySeeding(m.books, data.bracketFormat || DEFAULT_FORMAT));
     const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
     let crowned = false;
     if (finalMatch) {
@@ -882,7 +884,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
   // ── Monthly bracket battle screen ──
   if (monthBattle && m.books.length >= 2) {
-    const bracket = buildBracket(m.books);
+    const bracket = buildBracket(applySeeding(m.books, data.bracketFormat || DEFAULT_FORMAT));
     const match = bracket.rounds.flat().find(mt => mt.id === monthBattle);
     if (match) {
       const contenders = [];
@@ -1050,7 +1052,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
   // ── Monthly bracket overview (4+ books) ──
   if (showBracket && m.books.length >= 4) {
-    const bracket = buildBracket(m.books);
+    const bracket = buildBracket(applySeeding(m.books, data.bracketFormat || DEFAULT_FORMAT));
     const { rounds } = bracket;
 
     return (
@@ -1519,9 +1521,38 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   const { user } = useAuth();
   const months = data.months;
   const b      = data.bracket || {};
+  const format = data.bracketFormat || DEFAULT_FORMAT;
   const [top3Pick, setTop3Pick] = useState(false);
   const [showVictory, setShowVictory] = useState(false);
+  const [showFormatSheet, setShowFormatSheet] = useState(false);
   const prevFinalRef = useRef(b.final);
+
+  // Compute the *effective* R1 — when seeded-by-rating is on and all 12 months
+  // have a winner, re-pair the matches so the highest-rated meets the lowest,
+  // 2nd-highest meets 2nd-lowest, etc.  Otherwise fall back to the calendar
+  // pairing (Jan vs Feb, …).  R2 IDs stay intact so its references still work.
+  const effectiveR1 = (() => {
+    if (format !== "seeded_by_rating") return R1;
+    const seeded = months
+      .map((m, idx) => ({ idx, rating: m.winner?.rating ?? 0, hasWinner: !!m.winner }))
+      .sort((a, b) => Number(b.hasWinner) - Number(a.hasWinner) || b.rating - a.rating || a.idx - b.idx);
+    // Standard tournament seeding: 1 vs 12, 2 vs 11, 3 vs 10, …
+    const order = [];
+    let lo = 0, hi = seeded.length - 1;
+    while (lo < hi) order.push(seeded[lo++].idx, seeded[hi--].idx);
+    if (lo === hi) order.push(seeded[lo].idx);
+    return R1.map((match, mi) => ({
+      ...match,
+      m1: order[mi * 2],
+      m2: order[mi * 2 + 1],
+      label: `Seed ${mi * 2 + 1} vs ${mi * 2 + 2}`,
+    }));
+  })();
+
+  const setBracketFormat = (newFormat) => {
+    save({ ...data, bracketFormat: newFormat });
+    track(user?.id, EVENT.BRACKET_PICK, { type: "format_change", format: newFormat, year });
+  };
 
   // Trigger victory screen exactly once when `final` transitions from null → set
   useEffect(() => {
@@ -1547,7 +1578,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   // Order: remaining R1 matches → remaining R2 matches → final (if top3 ready).
   // Returns the matchId or null if everything's decided.
   const nextReadyMatch = (currentBracket, skipId) => {
-    for (const m of R1) {
+    for (const m of effectiveR1) {
       if (m.id === skipId || currentBracket[m.id]) continue;
       const b1 = months[m.m1]?.winner;
       const b2 = months[m.m2]?.winner;
@@ -1555,8 +1586,8 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
     }
     for (const m of R2) {
       if (m.id === skipId || currentBracket[m.id]) continue;
-      const w1 = getR1Winner(R1.find(r => r.id === m.p1), months, currentBracket);
-      const w2 = getR1Winner(R1.find(r => r.id === m.p2), months, currentBracket);
+      const w1 = getR1Winner(effectiveR1.find(r => r.id === m.p1), months, currentBracket);
+      const w2 = getR1Winner(effectiveR1.find(r => r.id === m.p2), months, currentBracket);
       if (w1 && w2) return m.id;
     }
     return null;
@@ -1619,8 +1650,8 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   // Resolve R2 winner (with auto-advance)
   const r2Winner = (match) => {
     if (b[match.id]) return b[match.id];
-    const w1 = r1Winner(R1.find(r => r.id === match.p1));
-    const w2 = r1Winner(R1.find(r => r.id === match.p2));
+    const w1 = r1Winner(effectiveR1.find(r => r.id === match.p1));
+    const w2 = r1Winner(effectiveR1.find(r => r.id === match.p2));
     if (w1 && !w2) return w1;
     if (w2 && !w1) return w2;
     return null;
@@ -1628,11 +1659,11 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
   // ── Battle screen (1v1) ──
   if (battleId) {
-    const match = [...R1, ...R2].find(m => m.id === battleId);
-    const { b1, b2 } = getBooks(match, months, b);
+    const match = [...effectiveR1, ...R2].find(m => m.id === battleId);
+    const { b1, b2 } = getBooks(match, months, b, effectiveR1);
     swipeBound.current = { b1, b2 };
     const winner = b[match.id];
-    const roundLabel = R1.includes(match) ? "Round 1" : "Round 2";
+    const roundLabel = effectiveR1.find(r => r.id === battleId) ? "Round 1" : "Round 2";
 
     // Visual feedback during a drag — non-zero swipeDx scales up the targeted
     // card and dims the other.  Cancels out once the user lifts their finger.
@@ -1748,7 +1779,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
   // ── Main bracket view ──
   const pickCount = months.filter(m => m.winner).length;
-  const anyR1Ready = R1.some(m => {
+  const anyR1Ready = effectiveR1.some(m => {
     const b1 = months[m.m1]?.winner;
     const b2 = months[m.m2]?.winner;
     return b1 || b2;
@@ -1776,17 +1807,34 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
       )}
 
       {/* Top actions */}
-      {Object.keys(b).length > 0 && (
-        <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
-          <button onClick={openShare}
-            style={{ padding:"6px 12px", background:"#14532d", border:"none", borderRadius:8, fontSize:12, fontWeight:700, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
-            📤 Share
-          </button>
-          <button onClick={resetBracket}
-            style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
-            Reset Bracket
-          </button>
-        </div>
+      {/* Top actions: format picker + share + reset */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+        <button onClick={() => setShowFormatSheet(true)}
+          style={{ padding:"6px 10px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:99, fontSize:12, fontWeight:700, color:"#14532d", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
+          <span>{getFormat(format).icon}</span>
+          <span>{getFormat(format).label}</span>
+          <span style={{ color:"#a8a29e", fontSize:10 }}>▾</span>
+        </button>
+        {Object.keys(b).length > 0 && (
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={openShare}
+              style={{ padding:"6px 12px", background:"#14532d", border:"none", borderRadius:8, fontSize:12, fontWeight:700, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+              📤 Share
+            </button>
+            <button onClick={resetBracket}
+              style={{ padding:"6px 12px", background:"#fff", border:"1px solid #e7e5e4", borderRadius:8, fontSize:12, fontWeight:700, color:"#dc2626", cursor:"pointer" }}>
+              Reset
+            </button>
+          </div>
+        )}
+      </div>
+
+      {showFormatSheet && (
+        <BracketFormatSheet
+          value={format}
+          onSelect={setBracketFormat}
+          onClose={() => setShowFormatSheet(false)}
+        />
       )}
 
       {/* Empty state */}
@@ -1809,7 +1857,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
           {/* ── ROUND 1: 6 matchup cards ── */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:10, width:"100%" }}>
-            {R1.map(match => {
+            {effectiveR1.map(match => {
               const b1 = months[match.m1]?.winner;
               const b2 = months[match.m2]?.winner;
               const winner = b[match.id];
@@ -1869,8 +1917,8 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
           {/* ── ROUND 2: 3 matchup cards ── */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:10, width:"85%" }}>
             {R2.map(match => {
-              const w1 = r1Winner(R1.find(r => r.id === match.p1));
-              const w2 = r1Winner(R1.find(r => r.id === match.p2));
+              const w1 = r1Winner(effectiveR1.find(r => r.id === match.p1));
+              const w2 = r1Winner(effectiveR1.find(r => r.id === match.p2));
               const winner = b[match.id];
               const autoAdvanced = (w1 && !w2) || (!w1 && w2);
               const advancee = autoAdvanced ? (w1 || w2) : null;
