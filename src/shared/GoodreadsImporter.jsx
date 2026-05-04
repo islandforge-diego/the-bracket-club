@@ -116,14 +116,14 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose }) {
           {/* Input row */}
           <div>
             <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>
-              Goodreads user ID or profile URL
+              Paste a Goodreads profile link
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Paste your profile URL or ID"
+                placeholder="https://goodreads.com/user/show/…"
                 style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#fff" }}
               />
               <button
@@ -134,8 +134,17 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose }) {
                 {loading ? "…" : "Fetch"}
               </button>
             </div>
-            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6, lineHeight: 1.4 }}>
-              Just paste the link to your Goodreads profile — anything like <code style={{ background: "#f5f5f4", padding: "1px 5px", borderRadius: 4 }}>goodreads.com/user/show/…</code> works.
+
+            {/* How-to: 3 quick steps */}
+            <div style={{ marginTop: 10, padding: "10px 12px", background: "#f0fdf4", borderRadius: 10, border: "1px solid #dcfce7" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#15803d", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                How to grab the link
+              </div>
+              <div style={{ fontSize: 12, color: "#166534", lineHeight: 1.55 }}>
+                <div>1. Open <strong>your Goodreads profile</strong> (yours or anyone's — the read shelf must be public)</div>
+                <div style={{ marginTop: 3 }}>2. Tap the <strong>Share</strong> button → <strong>Copy Link</strong></div>
+                <div style={{ marginTop: 3 }}>3. Paste it above and tap Fetch</div>
+              </div>
             </div>
           </div>
 

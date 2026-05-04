@@ -293,40 +293,11 @@ export default function App() {
         return;
       }
 
+      // No DEV bootstrap any more — new users start with an empty shelf.
+      // Books arrive via the Library tab (search / Goodreads import / manual)
+      // and through bracket creation.
       const existing = store.get(year);
-      if (existing) {
-        setData(existing);
-        setLoading(false);
-        return;
-      }
-
-      // DEV: auto-load Tara's Goodreads shelf for testing — remove before production
-      const DEV_GOODREADS_USER = "152670076";
-      try {
-        const allBooks = await fetchAllGoodreadsBooks(DEV_GOODREADS_USER);
-        const byYear = {};
-        allBooks.forEach(book => {
-          if (!byYear[book.year]) byYear[book.year] = [];
-          byYear[book.year].push(book);
-        });
-        for (const [yr, books] of Object.entries(byYear)) {
-          if (store.get(Number(yr))) continue;
-          const nd = freshData();
-          books.forEach((book, i) => {
-            nd.months[book.month].books.push({
-              id: Date.now() + i + Number(yr) * 1000,
-              title: book.title,
-              author: book.author,
-              cover: book.cover || "",
-              rating: book.rating,
-            });
-          });
-          store.set(Number(yr), nd);
-        }
-        setData(store.get(year) || freshData());
-      } catch {
-        setData(freshData());
-      }
+      setData(existing || freshData());
       setLoading(false);
     })();
   }, [user?.id]);
