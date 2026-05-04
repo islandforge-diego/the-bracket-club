@@ -42,6 +42,34 @@ import { track, EVENT } from "./lib/events.js";
 const CAT = getCategoryConfig();
 const CATEGORY_ID = "books";
 
+// ─── Battle transition keyframes ────────────────────────────────────────────
+// Mounted once at the top of the app via a <style> tag.  Used by every 1v1
+// matchup screen — cards mount with these animations so each new battle
+// presents one book, then the other (left first, right after a short stagger).
+// The winning-card highlight (scale + glow) on the *previous* match acts as
+// the "exit" feedback during the 650ms vote→advance delay.
+const BATTLE_ANIM_CSS = `
+  @keyframes bc-battle-card-left {
+    0%   { opacity: 0; transform: translate(-40px, 20px) scale(0.92); }
+    60%  { opacity: 1; }
+    100% { opacity: 1; transform: translate(0, 0) scale(1); }
+  }
+  @keyframes bc-battle-card-right {
+    0%   { opacity: 0; transform: translate(40px, 20px) scale(0.92); }
+    60%  { opacity: 1; }
+    100% { opacity: 1; transform: translate(0, 0) scale(1); }
+  }
+  @keyframes bc-battle-vs-pop {
+    0%   { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+    70%  { transform: translate(-50%, -50%) scale(1.25); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  }
+  @keyframes bc-battle-label-fade {
+    0%   { opacity: 0; transform: translateY(-6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+`;
+
 // ─── Book-specific modules ──────────────────────────────────────────────────
 import { extractGoodreadsUserId, fetchGoodreadsRSS, parseGoodreadsRSS, parseGoodreadsRSSAll, fetchAllGoodreadsBooks, parseGoodreadsCSV, searchBooks } from "./categories/books/data.js";
 import { generateMonthlyCard, generateTop3Card, generateBOTYCard } from "./categories/books/share.js";
@@ -193,6 +221,12 @@ function ShareOverlay({ data, year, onClose }) {
 }
 
 // ─── App Shell ────────────────────────────────────────────────────────────────
+// Inject the global battle keyframes once.  Defined as a tiny component so
+// React mounts the <style> exactly one time per session (no reflow per match).
+function BattleAnimationStyles() {
+  return <style>{BATTLE_ANIM_CSS}</style>;
+}
+
 export default function App() {
   const { user } = useAuth();
   const [data,     setData]     = useState(null);
@@ -340,6 +374,7 @@ export default function App() {
 
   if (isDesktop) return (
     <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"system-ui,-apple-system,sans-serif", background:"#f0fdf4" }}>
+      <BattleAnimationStyles />
       {/* ── Desktop sticky header/navbar ── */}
       <div style={{ background:"#14532d", color:"#fff", padding:"0 32px", height:64, display:"flex", alignItems:"center", gap:0, flexShrink:0, boxShadow:"0 2px 8px #0002", position:"sticky", top:0, zIndex:100 }}>
         <img src="/logo.png" alt="Bracket Club" style={{ height:40, width:40, objectFit:"contain", marginRight:14 }} />
@@ -388,6 +423,7 @@ export default function App() {
 
   return (
     <div style={{ height:"100dvh", maxHeight:812, background:"#f0fdf4", fontFamily:"system-ui,-apple-system,sans-serif", maxWidth:430, margin:"0 auto", position:"relative", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 0 0 1px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10)" }}>
+      <BattleAnimationStyles />
       {/* Header */}
       <div style={{ background:"#14532d", color:"#fff", textAlign:"center", padding:"6px 16px 2px", flexShrink:0, zIndex:20, boxShadow:"0 2px 8px #0002" }}>
         <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
@@ -936,7 +972,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
             style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
             ‹ Back to bracket
           </button>
-          <div style={{ textAlign:"center" }}>
+          <div key={`label-${monthBattle}`} style={{ textAlign:"center", animation: "bc-battle-label-fade 380ms ease-out backwards" }}>
             <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
             <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
             {!isTriple && <div style={{ fontSize:10, color:"#d6d3d1", marginTop:4 }}>Tap a card or swipe toward your pick</div>}
@@ -951,27 +987,33 @@ function Month({ data, save, idx, setIdx, onBack }) {
               const won = winner?.id === book?.id;
               const lost = winner && !won;
               const isB1 = i === 0;
+              const isLast = i === contenders.length - 1;
               const targeted = !isTriple && ((isB1 && targetLeft) || (!isB1 && targetRight));
               const dimmed   = !isTriple && ((isB1 && targetRight) || (!isB1 && targetLeft));
               const swipeScale  = won ? 1.04 : lost ? 0.96 : targeted ? 1 + 0.08 * swipeAmount : dimmed ? 1 - 0.04 * swipeAmount : 1;
               const swipeOpacity = won ? 1 : lost ? 0.45 : dimmed ? 1 - 0.4 * swipeAmount : 1;
               const swipeBorder  = won ? "#22c55e" : targeted ? "#22c55e" : "#e7e5e4";
+              // Stagger card entry — for triple, middle gets a slight delay too.
+              const animName = isB1 ? "bc-battle-card-left" : "bc-battle-card-right";
+              const animDelay = isB1 ? 0 : (isTriple && !isLast ? 130 : 200);
               return (
-                <button key={book?.id} onClick={() => monthVote(monthBattle, book)}
-                  style={{ flex:1, position:"relative", border:`2px solid ${swipeBorder}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: monthSwipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
-                  <Cover book={book} size={isTriple ? "md" : "lg"} />
-                  <div style={{ textAlign:"center" }}>
-                    <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
-                    {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
-                    {book?.rating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
-                  </div>
-                  {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
-                  <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
-                    style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
-                </button>
+                <div key={`${monthBattle}-${i}`} style={{ flex:1, animation: `${animName} 450ms ${animDelay}ms cubic-bezier(.34,1.56,.64,1) backwards` }}>
+                  <button onClick={() => monthVote(monthBattle, book)}
+                    style={{ width:"100%", position:"relative", border:`2px solid ${swipeBorder}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: monthSwipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
+                    <Cover book={book} size={isTriple ? "md" : "lg"} />
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
+                      {book?.author && <div style={{ fontSize: isTriple ? 9 : 11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                      {book?.rating && <div style={{ fontSize: isTriple ? 10 : 12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
+                    </div>
+                    {won && <span style={{ fontSize: isTriple ? 18 : 22 }}>🏆</span>}
+                    <div onClick={e => { e.stopPropagation(); setDetailBook(book); }}
+                      style={{ position:"absolute", top:6, right:6, width:22, height:22, borderRadius:11, background:"rgba(0,0,0,0.08)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#9ca3af", cursor:"pointer" }}>ⓘ</div>
+                  </button>
+                </div>
               );
             })}
-            {!isTriple && <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>}
+            {!isTriple && <div key={`vs-${monthBattle}`} style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none", animation:"bc-battle-vs-pop 450ms 350ms cubic-bezier(.34,1.56,.64,1) backwards" }}>VS</div>}
           </div>
           {winner && (
             <div style={{ textAlign:"center" }}>
@@ -1792,7 +1834,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
           ‹ Back to {label || "bracket"}
         </button>
-        <div style={{ textAlign:"center" }}>
+        <div key={`label-${battleId}`} style={{ textAlign:"center", animation: "bc-battle-label-fade 380ms ease-out backwards" }}>
           <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{roundLabel}</div>
           <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
           <div style={{ fontSize:10, color:"#d6d3d1", marginTop:4 }}>Tap a card or swipe toward your pick</div>
@@ -1813,21 +1855,26 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
             const swipeScale  = won ? 1.04 : lost ? 0.96 : targeted ? 1 + 0.08 * swipeAmount : dimmed ? 1 - 0.04 * swipeAmount : 1;
             const swipeOpacity = won ? 1 : lost ? 0.45 : dimmed ? 1 - 0.4 * swipeAmount : 1;
             const swipeBorder  = won ? "#22c55e" : targeted ? "#22c55e" : "#e7e5e4";
+            // Card wrapper handles entrance animation (key'd on battleId so it
+            // remounts each new match).  Inner button still transforms freely
+            // for swipe + winner state — wrapper anim doesn't override it.
             return (
-              <button key={book?.id} onClick={() => vote(battleId, book)}
-                style={{ flex:1, border:`2px solid ${swipeBorder}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: swipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
-                {ml && <div style={{ fontSize:10, fontWeight:700, color:"#78716c", background:"#f5f5f4", borderRadius:99, padding:"2px 8px" }}>{ml}</div>}
-                <Cover book={book} size="lg" />
-                <div style={{ textAlign:"center" }}>
-                  <div style={{ fontWeight:800, fontSize:13, color:"#1c1917" }}>{book?.title}</div>
-                  {book?.author && <div style={{ fontSize:11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
-                  {book?.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
-                </div>
-                {won && <span style={{ fontSize:22 }}>🏆</span>}
-              </button>
+              <div key={`${battleId}-${i}`} style={{ flex:1, animation: `${isB1 ? "bc-battle-card-left" : "bc-battle-card-right"} 450ms ${isB1 ? 0 : 200}ms cubic-bezier(.34,1.56,.64,1) backwards` }}>
+                <button onClick={() => vote(battleId, book)}
+                  style={{ width:"100%", border:`2px solid ${swipeBorder}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: swipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
+                  {ml && <div style={{ fontSize:10, fontWeight:700, color:"#78716c", background:"#f5f5f4", borderRadius:99, padding:"2px 8px" }}>{ml}</div>}
+                  <Cover book={book} size="lg" />
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontWeight:800, fontSize:13, color:"#1c1917" }}>{book?.title}</div>
+                    {book?.author && <div style={{ fontSize:11, color:"#78716c", marginTop:2 }}>{book.author}</div>}
+                    {book?.rating && <div style={{ fontSize:12, color:"#f59e0b", marginTop:3, letterSpacing:1 }}>{"★".repeat(book.rating)}{"☆".repeat(5 - book.rating)}</div>}
+                  </div>
+                  {won && <span style={{ fontSize:22 }}>🏆</span>}
+                </button>
+              </div>
             );
           })}
-          <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none" }}>VS</div>
+          <div key={`vs-${battleId}`} style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"#14532d", color:"#fff", borderRadius:99, width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800, boxShadow:"0 2px 8px #14532d66", zIndex:5, pointerEvents:"none", animation:"bc-battle-vs-pop 450ms 350ms cubic-bezier(.34,1.56,.64,1) backwards" }}>VS</div>
         </div>
         {winner && (
           <div style={{ textAlign:"center" }}>

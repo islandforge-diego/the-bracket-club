@@ -152,6 +152,7 @@ export default function VictoryScreen({ book, title = "Champion", subtitle, onCl
         <div
           style={{
             display: "flex", gap: 10, marginTop: 12, width: "100%",
+            justifyContent: onShare ? "stretch" : "center",
             animation: "bc-text-fade 600ms 900ms backwards",
           }}
         >
@@ -170,7 +171,9 @@ export default function VictoryScreen({ book, title = "Champion", subtitle, onCl
           <button
             onClick={onClose}
             style={{
-              flex: onShare ? 1 : "none", padding: "12px 20px",
+              flex: onShare ? 1 : "none",
+              minWidth: onShare ? undefined : 160,                  // wider tap target when alone
+              padding: "12px 20px",
               background: "rgba(255,255,255,0.15)", color: "#fff", border: "1px solid rgba(255,255,255,0.25)",
               borderRadius: 99, fontWeight: 700, fontSize: 14, cursor: "pointer",
             }}

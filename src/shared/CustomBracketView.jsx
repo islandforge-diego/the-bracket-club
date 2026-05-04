@@ -194,7 +194,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
             style={{ background: "none", border: "none", color: "#15803d", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: 0 }}>
             ‹ Back to bracket
           </button>
-          <div style={{ textAlign: "center" }}>
+          <div key={`label-${match.id}`} style={{ textAlign: "center", animation: "bc-battle-label-fade 380ms ease-out backwards" }}>
             <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 2 }}>{isFinal ? "Final" : `Round ${roundNumOf(rounds, match.id)}`}</div>
             <div style={{ fontWeight: 800, fontSize: 20, color: "#1c1917", marginTop: 4 }}>Pick the Winner</div>
             {!isTriple && <div style={{ fontSize: 10, color: "#d6d3d1", marginTop: 4 }}>Tap a card or swipe toward your pick</div>}
@@ -207,6 +207,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
           >
             {contenders.filter(Boolean).map((book, i) => {
               const isB1 = i === 0;
+              const isLast = i === contenders.length - 1;
               const won  = winner?.id === book?.id;
               const lost = winner && !won;
               const targeted = !isTriple && ((isB1 && targetA) || (!isB1 && targetB));
@@ -214,19 +215,23 @@ export default function CustomBracketView({ bracketId, onBack }) {
               const scale    = won ? 1.04 : lost ? 0.96 : targeted ? 1 + 0.08 * swipeAmount : dimmed ? 1 - 0.04 * swipeAmount : 1;
               const opacity  = won ? 1 : lost ? 0.45 : dimmed ? 1 - 0.4 * swipeAmount : 1;
               const border   = won ? "#22c55e" : targeted ? "#22c55e" : "#e7e5e4";
+              const animName = isB1 ? "bc-battle-card-left" : "bc-battle-card-right";
+              const animDelay = isB1 ? 0 : (isTriple && !isLast ? 130 : 200);
               return (
-                <button key={book?.id} onClick={() => doVote(match.id, book)}
-                  style={{ flex: 1, border: `2px solid ${border}`, borderRadius: 18, padding: isTriple ? "12px 6px" : "16px 10px", display: "flex", flexDirection: "column", alignItems: "center", gap: isTriple ? 6 : 10, background: won ? "#f0fdf4" : lost ? "#fafaf9" : targeted ? "#f0fdf4" : "#fff", transform: `scale(${scale})`, opacity, boxShadow: (won || targeted) ? "0 4px 20px #22c55e44" : "0 1px 4px #0001", transition: swipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor: "pointer" }}>
-                  <Cover book={book} size="lg" />
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontWeight: 800, fontSize: 13, color: "#1c1917" }}>{book?.title}</div>
-                    {book?.author && <div style={{ fontSize: 11, color: "#78716c", marginTop: 2 }}>{book.author}</div>}
-                  </div>
-                  {won && <span style={{ fontSize: 22 }}>🏆</span>}
-                </button>
+                <div key={`${match.id}-${i}`} style={{ flex: 1, animation: `${animName} 450ms ${animDelay}ms cubic-bezier(.34,1.56,.64,1) backwards` }}>
+                  <button onClick={() => doVote(match.id, book)}
+                    style={{ width: "100%", border: `2px solid ${border}`, borderRadius: 18, padding: isTriple ? "12px 6px" : "16px 10px", display: "flex", flexDirection: "column", alignItems: "center", gap: isTriple ? 6 : 10, background: won ? "#f0fdf4" : lost ? "#fafaf9" : targeted ? "#f0fdf4" : "#fff", transform: `scale(${scale})`, opacity, boxShadow: (won || targeted) ? "0 4px 20px #22c55e44" : "0 1px 4px #0001", transition: swipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor: "pointer" }}>
+                    <Cover book={book} size="lg" />
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontWeight: 800, fontSize: 13, color: "#1c1917" }}>{book?.title}</div>
+                      {book?.author && <div style={{ fontSize: 11, color: "#78716c", marginTop: 2 }}>{book.author}</div>}
+                    </div>
+                    {won && <span style={{ fontSize: 22 }}>🏆</span>}
+                  </button>
+                </div>
               );
             })}
-            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: "#14532d", color: "#fff", borderRadius: 99, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, boxShadow: "0 2px 8px #14532d66", zIndex: 5, pointerEvents: "none" }}>VS</div>
+            <div key={`vs-${match.id}`} style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: "#14532d", color: "#fff", borderRadius: 99, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, boxShadow: "0 2px 8px #14532d66", zIndex: 5, pointerEvents: "none", animation: "bc-battle-vs-pop 450ms 350ms cubic-bezier(.34,1.56,.64,1) backwards" }}>VS</div>
           </div>
         </div>
       </>
