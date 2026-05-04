@@ -21,6 +21,8 @@ import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import ItemSearch from "./ItemSearch.jsx";
 import GoodreadsImporter from "./GoodreadsImporter.jsx";
+import CSVImporter       from "./CSVImporter.jsx";
+import PasteListImporter from "./PasteListImporter.jsx";
 import LibraryPicker from "./LibraryPicker.jsx";
 import { addToLibrary, addManyToLibrary, librarySize } from "./userLibrary.js";
 import { buildBracket, getBracketWinner } from "./bracket.js";
@@ -61,6 +63,8 @@ export default function CustomBracketView({ bracketId, onBack }) {
   const [showVictory,   setShowVictory]   = useState(false);
   const [showImporter,  setShowImporter]  = useState(false);
   const [showLibrary,   setShowLibrary]   = useState(false);
+  const [showCSV,       setShowCSV]       = useState(false);
+  const [showPaste,     setShowPaste]     = useState(false);
   const prevWinnerRef = useRef(bracket?.winner);
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeStart = useRef(null);
@@ -255,16 +259,33 @@ export default function CustomBracketView({ bracketId, onBack }) {
             </button>
           )}
 
-          {/* Bulk import from Goodreads */}
-          <button onClick={() => { playUI("tap"); setShowImporter(true); }}
-            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
-            <span style={{ fontSize: 18 }}>📚</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917" }}>Import from Goodreads</div>
-              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>Pull from your read shelf and pick</div>
-            </div>
-            <span style={{ color: "#a8a29e", fontSize: 16 }}>›</span>
-          </button>
+          {/* Bulk imports — Goodreads / CSV / Paste */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <button onClick={() => { playUI("tap"); setShowImporter(true); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+              <span style={{ fontSize: 18 }}>📚</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917" }}>Goodreads</div>
+                <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>Profile link</div>
+              </div>
+            </button>
+            <button onClick={() => { playUI("tap"); setShowCSV(true); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+              <span style={{ fontSize: 18 }}>📄</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917" }}>CSV</div>
+                <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>Library export</div>
+              </div>
+            </button>
+            <button onClick={() => { playUI("tap"); setShowPaste(true); }}
+              style={{ gridColumn: "span 2", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+              <span style={{ fontSize: 18 }}>📋</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917" }}>Paste a list</div>
+                <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>One title per line</div>
+              </div>
+            </button>
+          </div>
 
           {/* Currently-added books */}
           {bracket.items.length === 0 ? (
@@ -308,8 +329,27 @@ export default function CustomBracketView({ bracketId, onBack }) {
         {showImporter && (
           <GoodreadsImporter
             maxToAdd={size - bracket.items.length}
+            destinationLabel="bracket"
             onImport={(picked) => { addBooks(picked); setShowImporter(false); }}
             onClose={() => setShowImporter(false)}
+          />
+        )}
+
+        {showCSV && (
+          <CSVImporter
+            maxToAdd={size - bracket.items.length}
+            destinationLabel="bracket"
+            onImport={(picked) => { addBooks(picked); setShowCSV(false); }}
+            onClose={() => setShowCSV(false)}
+          />
+        )}
+
+        {showPaste && (
+          <PasteListImporter
+            maxToAdd={size - bracket.items.length}
+            destinationLabel="bracket"
+            onImport={(picked) => { addBooks(picked); setShowPaste(false); }}
+            onClose={() => setShowPaste(false)}
           />
         )}
 

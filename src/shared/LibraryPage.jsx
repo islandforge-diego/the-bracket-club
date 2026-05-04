@@ -15,15 +15,19 @@ import { useState } from "react";
 import Cover from "./Cover.jsx";
 import ItemSearch from "./ItemSearch.jsx";
 import GoodreadsImporter from "./GoodreadsImporter.jsx";
+import CSVImporter from "./CSVImporter.jsx";
+import PasteListImporter from "./PasteListImporter.jsx";
 import SwipeableRow from "./SwipeableRow.jsx";
 import { searchBooks } from "../categories/books/data.js";
 import { listLibrary, addToLibrary, addManyToLibrary, removeFromLibrary } from "./userLibrary.js";
 import { playUI, playStar } from "./soundscape.js";
 
 export default function LibraryPage() {
-  const [_, force]               = useState(0);
-  const rerender                 = () => force((n) => n + 1);
-  const [showImporter, setShowI] = useState(false);
+  const [_, force]                  = useState(0);
+  const rerender                    = () => force((n) => n + 1);
+  const [showImporter, setShowI]    = useState(false);
+  const [showCSV,      setShowCSV]  = useState(false);
+  const [showPaste,    setShowPaste]= useState(false);
 
   const books = listLibrary();
 
@@ -68,24 +72,12 @@ export default function LibraryPage() {
         />
       </div>
 
-      {/* Bulk import + manual, side by side */}
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={() => { playUI("tap"); setShowI(true); }}
-          style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
-          <span style={{ fontSize: 18 }}>📚</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917" }}>Import from Goodreads</div>
-            <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>Pull your read shelf in bulk</div>
-          </div>
-        </button>
-        <button onClick={() => { playUI("tap"); onManual(); }}
-          style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
-          <span style={{ fontSize: 18 }}>✏️</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917" }}>Add manually</div>
-            <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>Title + author</div>
-          </div>
-        </button>
+      {/* Four bulk-import paths in a 2×2 grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <ImportTile icon="📚" label="From Goodreads"  sub="Public profile link"    onClick={() => { playUI("tap"); setShowI(true); }} />
+        <ImportTile icon="📄" label="Upload CSV"      sub="Goodreads or StoryGraph" onClick={() => { playUI("tap"); setShowCSV(true); }} />
+        <ImportTile icon="📋" label="Paste a list"    sub="One title per line"      onClick={() => { playUI("tap"); setShowPaste(true); }} />
+        <ImportTile icon="✏️" label="Add manually"    sub="Title + author"          onClick={() => { playUI("tap"); onManual(); }} />
       </div>
 
       {/* List */}
@@ -120,7 +112,8 @@ export default function LibraryPage() {
 
       {showImporter && (
         <GoodreadsImporter
-          maxToAdd={1000}                     /* no real cap for library import */
+          maxToAdd={1000}
+          destinationLabel="library"
           onImport={(picked) => {
             const n = addManyToLibrary(picked, "goodreads");
             if (n > 0) playStar();
@@ -130,6 +123,52 @@ export default function LibraryPage() {
           onClose={() => setShowI(false)}
         />
       )}
+
+      {showCSV && (
+        <CSVImporter
+          maxToAdd={1000}
+          destinationLabel="library"
+          onImport={(picked) => {
+            const n = addManyToLibrary(picked, "csv");
+            if (n > 0) playStar();
+            setShowCSV(false);
+            rerender();
+          }}
+          onClose={() => setShowCSV(false)}
+        />
+      )}
+
+      {showPaste && (
+        <PasteListImporter
+          maxToAdd={1000}
+          destinationLabel="library"
+          onImport={(picked) => {
+            const n = addManyToLibrary(picked, "paste");
+            if (n > 0) playStar();
+            setShowPaste(false);
+            rerender();
+          }}
+          onClose={() => setShowPaste(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function ImportTile({ icon, label, sub, onClick }) {
+  return (
+    <button onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 10,
+        padding: "10px 12px", background: "#fff",
+        border: "1.5px dashed #d6d3d1", borderRadius: 12,
+        cursor: "pointer", textAlign: "left",
+      }}>
+      <span style={{ fontSize: 20 }}>{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: "#1c1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</div>
+      </div>
+    </button>
   );
 }

@@ -1,82 +1,57 @@
 /**
- * GoodreadsImporter — fetch a user's Goodreads "read" shelf and let them
- * cherry-pick books into the active bracket / library.
+ * CSVImporter — pull a library export CSV (Goodreads or StoryGraph) into
+ * the active library / bracket.
  *
- * Flow:
- *   1. User pastes their Goodreads profile URL (or numeric ID)
- *   2. We fetch their public read shelf via /api/goodreads (CORS proxy)
- *      and parse it client-side
- *   3. Books render newest-read-first in a multi-select grid with
- *      filters (search text, year read, minimum rating)
- *   4. Two paths:
- *        • "Add N selected" — caller-defined cap (size of the bracket)
- *        • "Import all"     — adds everything (capped at maxToAdd)
+ * Both platforms export their library as a CSV with the same essential
+ * shape: title, author, rating, date read, status.  parseLibraryCSV picks
+ * the columns by name pattern so the user doesn't have to declare which
+ * service they're importing from.
  *
- * The user's last Goodreads ID is cached in localStorage so they don't
- * have to re-enter it for every import.  No persistent credentials —
- * the read shelf RSS is public per Goodreads.
+ * Same multi-select + filter + import-all pattern as GoodreadsImporter so
+ * users get a consistent flow regardless of source.
  *
  * Props
- *   maxToAdd       slots remaining in the destination (bracket size or 1000 for library)
- *   onImport       (books) => void  — receives selected books
- *   onClose        () => void
- *   destinationLabel  "library" | "bracket" — drives CTA labels
+ *   maxToAdd            slots remaining
+ *   onImport            (books) => void
+ *   onClose             () => void
+ *   destinationLabel    "library" | "bracket" — drives CTA copy
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import Cover from "./Cover.jsx";
-import { extractGoodreadsUserId, fetchAllGoodreadsBooks } from "../categories/books/data.js";
+import { parseLibraryCSV } from "../categories/books/data.js";
 
-const STORAGE_KEY = "bc_goodreads_user_id";
-
-export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destinationLabel = "bracket" }) {
-  const [input,    setInput]    = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY) || ""; } catch { return ""; }
-  });
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
+export default function CSVImporter({ maxToAdd, onImport, onClose, destinationLabel = "library" }) {
   const [books,    setBooks]    = useState([]);
+  const [error,    setError]    = useState("");
+  const [filename, setFilename] = useState("");
   const [selected, setSelected] = useState(new Set());
 
-  // Filter state
   const [filterText,   setFilterText]   = useState("");
   const [filterYear,   setFilterYear]   = useState("all");
   const [filterRating, setFilterRating] = useState(0);
 
-  const inputRef = useRef(null);
+  const fileRef = useRef(null);
 
-  // Auto-fetch on mount if we already have a saved ID — saves a tap
-  useEffect(() => {
-    if (input && !books.length && !loading) {
-      const uid = extractGoodreadsUserId(input);
-      if (uid) doFetch(uid);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const doFetch = async (uidArg) => {
-    const uid = uidArg || extractGoodreadsUserId(input);
-    if (!uid) {
-      setError("Couldn't find a user ID in that.  Paste your full Goodreads profile URL — the link from the address bar of your profile page.");
-      return;
-    }
-    setLoading(true);
+  const handleFile = async (file) => {
+    if (!file) return;
     setError("");
     setSelected(new Set());
+    setFilename(file.name);
     try {
-      const items = await fetchAllGoodreadsBooks(uid);
-      const sorted = items.sort((a, b) => (b.year - a.year) || (b.month - a.month));
+      const text  = await file.text();
+      const items = parseLibraryCSV(text);
+      const sorted = items.sort((a, b) => (b.year || 0) - (a.year || 0) || (b.month || 0) - (a.month || 0));
       setBooks(sorted);
-      try { localStorage.setItem(STORAGE_KEY, uid); } catch { /* ignore */ }
-      if (sorted.length === 0) setError("No books found on that user's read shelf.");
+      if (sorted.length === 0) {
+        setError("Couldn't find any read books in that CSV.  Make sure it's a Goodreads or StoryGraph library export.");
+      }
     } catch {
-      setError("Couldn't reach Goodreads.  The shelf may be private, or the proxy is offline.");
+      setError("Couldn't read that file.  Try exporting again from Goodreads (Settings → Import/Export) or StoryGraph.");
     }
-    setLoading(false);
   };
 
-  // Apply filters → which books are visible
   const visible = books.filter((b) => {
     if (filterText.trim()) {
       const q = filterText.toLowerCase();
@@ -86,11 +61,7 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
     if (filterRating > 0 && (b.rating || 0) < filterRating) return false;
     return true;
   });
-
-  // Years available in the shelf — feeds the year dropdown
-  const years = [...new Set(books.map((b) => b.year))].sort((a, b) => b - a);
-
-  // Visible-only set membership for "select all visible" toggle
+  const years = [...new Set(books.map((b) => b.year).filter(Boolean))].sort((a, b) => b - a);
   const visibleIdxs = visible.map((b) => books.indexOf(b));
   const allVisibleSelected = visibleIdxs.length > 0 && visibleIdxs.every((i) => selected.has(i));
 
@@ -102,7 +73,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
       return next;
     });
   };
-
   const selectAllVisible = () => {
     setSelected((s) => {
       const next = new Set(s);
@@ -113,7 +83,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
       return next;
     });
   };
-
   const clearSelection = () => setSelected(new Set());
 
   const doImportSelected = () => {
@@ -121,7 +90,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
     onImport?.(picked);
   };
 
-  // "Import all" → add up to maxToAdd from the FILTERED set
   const importAllVisible = () => {
     const cap = Math.min(visible.length, maxToAdd);
     if (cap < visible.length) {
@@ -131,8 +99,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
     }
     onImport?.(visible.slice(0, cap));
   };
-
-  const showHowTo = books.length === 0 && !loading;
 
   const overlay = (
     <div
@@ -150,51 +116,39 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
           display: "flex", flexDirection: "column", overflow: "hidden",
         }}
       >
-        {/* ── Header ────────────────────────────────────────────── */}
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #e7e5e4", background: "#fff", display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#15803d", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: 0 }}>
             ✕ Close
           </button>
           <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ fontWeight: 800, fontSize: 14, color: "#1c1917" }}>Import from Goodreads</div>
-            <div style={{ fontSize: 10, color: "#9ca3af" }}>Pick books from your read shelf</div>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#1c1917" }}>Import a CSV</div>
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>Goodreads or StoryGraph library export</div>
           </div>
           <div style={{ width: 50 }} />
         </div>
 
-        {/* ── Body ─────────────────────────────────────────────── */}
         <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Input row */}
           <div>
-            <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>
-              Paste a Goodreads profile link
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="https://goodreads.com/user/show/…"
-                style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#fff" }}
-              />
-              <button
-                onClick={() => doFetch()}
-                disabled={loading || !input.trim()}
-                style={{ padding: "10px 14px", borderRadius: 10, background: loading || !input.trim() ? "#d6d3d1" : "#14532d", color: "#fff", border: "none", fontWeight: 800, fontSize: 13, cursor: loading || !input.trim() ? "default" : "pointer" }}
-              >
-                {loading ? "…" : "Fetch"}
-              </button>
-            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: "none" }}
+              onChange={(e) => handleFile(e.target.files?.[0])}
+            />
+            <button onClick={() => fileRef.current?.click()}
+              style={{ width: "100%", padding: "16px", borderRadius: 12, background: "#fff", border: "1.5px dashed #14532d", color: "#14532d", fontWeight: 800, fontSize: 14, cursor: "pointer" }}>
+              📄 {filename ? `Replace: ${filename}` : "Choose CSV file"}
+            </button>
 
-            {showHowTo && (
+            {books.length === 0 && !error && (
               <div style={{ marginTop: 10, padding: "10px 12px", background: "#f0fdf4", borderRadius: 10, border: "1px solid #dcfce7" }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: "#15803d", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
-                  How to grab the link
+                  Where to get the file
                 </div>
                 <div style={{ fontSize: 12, color: "#166534", lineHeight: 1.55 }}>
-                  <div>1. Open <strong>your Goodreads profile</strong> (yours or anyone's — the read shelf must be public)</div>
-                  <div style={{ marginTop: 3 }}>2. Tap the <strong>Share</strong> button → <strong>Copy Link</strong></div>
-                  <div style={{ marginTop: 3 }}>3. Paste it above and tap Fetch</div>
+                  <div><strong>Goodreads:</strong> goodreads.com/review/import → Export Library</div>
+                  <div style={{ marginTop: 3 }}><strong>StoryGraph:</strong> Manage account → Manage Data → Export Library</div>
                 </div>
               </div>
             )}
@@ -208,7 +162,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
 
           {books.length > 0 && (
             <>
-              {/* Filter bar */}
               <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", background: "#fff", borderRadius: 12, border: "1px solid #e7e5e4" }}>
                 <input
                   value={filterText}
@@ -217,21 +170,13 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
                   style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 13, outline: "none", boxSizing: "border-box" }}
                 />
                 <div style={{ display: "flex", gap: 8 }}>
-                  <select
-                    value={filterYear}
-                    onChange={(e) => setFilterYear(e.target.value)}
-                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12, background: "#fff" }}
-                  >
+                  <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)}
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12, background: "#fff" }}>
                     <option value="all">All years</option>
-                    {years.map((y) => (
-                      <option key={y} value={String(y)}>Read in {y}</option>
-                    ))}
+                    {years.map((y) => <option key={y} value={String(y)}>Read in {y}</option>)}
                   </select>
-                  <select
-                    value={filterRating}
-                    onChange={(e) => setFilterRating(Number(e.target.value))}
-                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12, background: "#fff" }}
-                  >
+                  <select value={filterRating} onChange={(e) => setFilterRating(Number(e.target.value))}
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12, background: "#fff" }}>
                     <option value="0">Any rating</option>
                     <option value="3">★★★ &amp; up</option>
                     <option value="4">★★★★ &amp; up</option>
@@ -240,7 +185,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
                 </div>
               </div>
 
-              {/* Counts + bulk toggles */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ fontSize: 12, color: "#78716c", fontWeight: 700 }}>
                   {visible.length} of {books.length} shown
@@ -256,7 +200,6 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
                 </div>
               </div>
 
-              {/* Book grid */}
               {visible.length === 0 ? (
                 <div style={{ padding: "20px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
                   No books match these filters.
@@ -281,13 +224,9 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
                         <div style={{ fontSize: 10, fontWeight: 700, color: "#1c1917", lineHeight: 1.2, maxHeight: 24, overflow: "hidden" }}>
                           {b.title}
                         </div>
-                        {b.rating ? (
-                          <div style={{ fontSize: 9, color: "#f59e0b", letterSpacing: 0.5 }}>{"★".repeat(b.rating)}</div>
-                        ) : null}
+                        {b.rating ? <div style={{ fontSize: 9, color: "#f59e0b", letterSpacing: 0.5 }}>{"★".repeat(b.rating)}</div> : null}
                         {sel && (
-                          <span style={{ position: "absolute", top: 3, right: 3, background: "#22c55e", color: "#fff", borderRadius: 99, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800 }}>
-                            ✓
-                          </span>
+                          <span style={{ position: "absolute", top: 3, right: 3, background: "#22c55e", color: "#fff", borderRadius: 99, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800 }}>✓</span>
                         )}
                       </button>
                     );
@@ -296,16 +235,8 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
               )}
             </>
           )}
-
-          {!loading && !error && books.length === 0 && (
-            <div style={{ background: "#fff", borderRadius: 12, padding: "20px 16px", textAlign: "center", color: "#9ca3af", fontSize: 12 }}>
-              <div style={{ fontSize: 28, marginBottom: 6 }}>📚</div>
-              Paste your profile link above to load your shelf.
-            </div>
-          )}
         </div>
 
-        {/* ── Footer: bulk + selected CTAs ────────────────────── */}
         {books.length > 0 && (
           <div style={{ borderTop: "1px solid #e7e5e4", background: "#fff", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
             <button onClick={importAllVisible} disabled={visible.length === 0}
@@ -314,9 +245,7 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose, destina
             </button>
             <button onClick={doImportSelected} disabled={selected.size === 0}
               style={{ width: "100%", padding: 12, borderRadius: 10, background: selected.size === 0 ? "#d6d3d1" : "#14532d", color: "#fff", border: "none", fontWeight: 800, fontSize: 13, cursor: selected.size === 0 ? "default" : "pointer" }}>
-              {selected.size === 0
-                ? "Pick books to add manually"
-                : `Add ${selected.size} selected to ${destinationLabel}`}
+              {selected.size === 0 ? "Pick books to add manually" : `Add ${selected.size} selected to ${destinationLabel}`}
             </button>
           </div>
         )}

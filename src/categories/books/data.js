@@ -38,6 +38,83 @@ export function parseCSVLine(line) {
   return result;
 }
 
+/**
+ * Year-agnostic flexible CSV parser — handles Goodreads + StoryGraph
+ * library exports + any similar shape.  Picks columns by name pattern so
+ * the same code reads both formats.  Returns every "read" row regardless
+ * of year (use the year field on each item to filter downstream if needed).
+ *
+ * Returned rows: { title, author, rating, year, month, isbn13, cover }
+ */
+export function parseLibraryCSV(text) {
+  const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]).map(h => h.trim());
+
+  // Column index lookup, case- and punctuation-insensitive
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const findCol = (...names) => {
+    for (const n of names) {
+      const i = headers.findIndex((h) => norm(h) === norm(n));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  const cTitle  = findCol("Title");
+  const cAuthor = findCol("Author", "Authors");
+  const cRating = findCol("My Rating", "Star Rating", "Rating");
+  const cDate   = findCol("Date Read", "Last Date Read", "Read Date");
+  const cShelf  = findCol("Exclusive Shelf", "Read Status", "Shelf");
+  const cISBN   = findCol("ISBN13", "ISBN-13", "ISBN");
+
+  if (cTitle < 0) return [];
+
+  const items = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCSVLine(lines[i]);
+
+    // Treat row as "read" if no shelf column, or if shelf says read/finished
+    if (cShelf >= 0) {
+      const s = (vals[cShelf] || "").toLowerCase();
+      if (!s.includes("read") || s.includes("to-read") || s.includes("currently")) continue;
+    }
+
+    const title = (vals[cTitle] || "").trim();
+    if (!title) continue;
+
+    let rating = null;
+    if (cRating >= 0) {
+      const r = parseInt(vals[cRating]);
+      if (r >= 1 && r <= 5) rating = r;
+      // StoryGraph uses 0-10 sometimes — halve if too high
+      else if (r >= 6 && r <= 10) rating = Math.round(r / 2);
+    }
+
+    let year = null, month = null;
+    if (cDate >= 0) {
+      const d = (vals[cDate] || "").trim();
+      // Goodreads: YYYY/MM/DD; StoryGraph: YYYY-MM-DD or YYYY/MM/DD
+      const dm = d.match(/^(\d{4})[\/\-](\d{1,2})(?:[\/\-](\d{1,2}))?/);
+      if (dm) {
+        year  = parseInt(dm[1]);
+        month = parseInt(dm[2]) - 1;
+      }
+    }
+
+    items.push({
+      title,
+      author: (cAuthor >= 0 ? vals[cAuthor] : "").trim(),
+      rating,
+      year,
+      month: month != null && month >= 0 && month <= 11 ? month : null,
+      isbn13: cISBN >= 0 ? (vals[cISBN] || "").replace(/\D/g, "").slice(0, 13) || null : null,
+      cover: "",
+    });
+  }
+  return items;
+}
+
 export function parseGoodreadsCSV(text, targetYear) {
   const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
   if (lines.length < 2) return [];
