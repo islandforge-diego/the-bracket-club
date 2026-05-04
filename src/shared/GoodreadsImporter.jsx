@@ -41,16 +41,16 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose }) {
   // Auto-fetch on mount if we already have a saved ID — saves a tap
   useEffect(() => {
     if (input && !books.length && !loading) {
-      const uid = extractGoodreadsUserId(input) || input;
-      if (/^\d+$/.test(uid)) doFetch(uid);
+      const uid = extractGoodreadsUserId(input);
+      if (uid) doFetch(uid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const doFetch = async (uidArg) => {
-    const uid = uidArg || extractGoodreadsUserId(input) || input.trim();
-    if (!/^\d+$/.test(uid)) {
-      setError("That doesn't look like a Goodreads user ID.  Try pasting your profile URL instead.");
+    const uid = uidArg || extractGoodreadsUserId(input);
+    if (!uid) {
+      setError("Couldn't find a user ID in that.  Paste your full Goodreads profile URL — the link from the address bar of your profile page.");
       return;
     }
     setLoading(true);
@@ -123,7 +123,7 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose }) {
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="e.g. 152670076 or your profile URL"
+                placeholder="Paste your profile URL or ID"
                 style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#fff" }}
               />
               <button
@@ -135,7 +135,7 @@ export default function GoodreadsImporter({ maxToAdd, onImport, onClose }) {
               </button>
             </div>
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6, lineHeight: 1.4 }}>
-              Find your ID in your Goodreads profile URL — the digits after <code style={{ background: "#f5f5f4", padding: "1px 5px", borderRadius: 4 }}>/user/show/</code> or <code style={{ background: "#f5f5f4", padding: "1px 5px", borderRadius: 4 }}>/review/list/</code>.
+              Just paste the link to your Goodreads profile — anything like <code style={{ background: "#f5f5f4", padding: "1px 5px", borderRadius: 4 }}>goodreads.com/user/show/…</code> works.
             </div>
           </div>
 

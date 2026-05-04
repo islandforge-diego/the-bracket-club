@@ -69,8 +69,30 @@ export function parseGoodreadsCSV(text, targetYear) {
   return items;
 }
 
+/**
+ * Pull the numeric Goodreads user ID out of a variety of inputs.
+ *
+ * Accepts:
+ *   - A bare numeric ID:                   "152670076"
+ *   - A profile URL with optional slug:    "https://www.goodreads.com/user/show/152670076-firstname-lastname"
+ *   - A profile URL without slug:          "https://www.goodreads.com/user/show/152670076"
+ *   - A review-list URL:                   "https://www.goodreads.com/review/list/152670076?shelf=read"
+ *   - The RSS endpoint:                    "https://www.goodreads.com/review/list_rss/152670076?shelf=read"
+ *
+ * Returns null for usernames-only or anything else — Goodreads' RSS endpoint
+ * needs the numeric ID and there's no public username→ID resolver we can
+ * call without scraping HTML.  Caller surfaces a helpful error in that case.
+ */
 export function extractGoodreadsUserId(input) {
-  const m = input.match(/goodreads\.com\/review\/list(?:_rss)?\/(\d+)/);
+  const trimmed = (input || "").trim();
+  if (!trimmed) return null;
+  // Bare numeric ID
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  // Match every URL form Goodreads ships:
+  //   /user/show/{id}            (with or without -slug)
+  //   /review/list/{id}          (with or without query string)
+  //   /review/list_rss/{id}
+  const m = trimmed.match(/goodreads\.com\/(?:user\/show|review\/list(?:_rss)?)\/(\d+)/);
   return m ? m[1] : null;
 }
 

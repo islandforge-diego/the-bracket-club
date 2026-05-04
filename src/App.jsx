@@ -29,6 +29,7 @@ import { listCustomBrackets, createCustomBracket, deleteCustomBracket, updateCus
 import { COMMUNITY_BRACKETS, getCommunityBracket } from "./shared/communityBrackets.js";
 import { getPrefs, scoreForUser } from "./shared/userPreferences.js";
 import LoginModal from "./lib/LoginModal.jsx";
+import LibraryPage from "./shared/LibraryPage.jsx";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -236,7 +237,7 @@ export default function App() {
   const { user } = useAuth();
   const [data,     setData]     = useState(null);
   const [loading,  setLoading]  = useState(true);
-  const [view,     setView]     = useState("home");
+  const [view,     setView]     = useState("bracket");
   const [battleId, setBattleId] = useState(null);
   const [year,     setYear]     = useState(new Date().getFullYear());
   const [showShare, setShowShare] = useState(false);
@@ -362,16 +363,17 @@ export default function App() {
     queueSync(nd);
   };
 
-  // New Releases tab temporarily hidden while we focus on brackets.  The
-  // component + data layer stay in the codebase so re-enabling is one revert.
+  // Two-tab nav: Brackets (default) + Library (the user's saved books).
+  // The Home/Month flow + New Releases tab stay unmounted but in the repo
+  // for revert safety.  See git log for that retired structure.
   const NAV = [
-    { v:"home",    icon:"🏠", lbl:"Home"    },
-    { v:"bracket", icon:"🏆", lbl:"Bracket" },
+    { v:"bracket", icon:"🏆", lbl:"Brackets" },
+    { v:"library", icon:"📚", lbl:"Library"  },
   ];
 
-  const VIEWS = ["home", "bracket"];
-  // Fall back to 0 (Home) for any unknown view — guards against stale "popular"
-  // state from before the New Releases tab was hidden.
+  const VIEWS = ["bracket", "library"];
+  // Fall back to 0 (Brackets) for any unknown view — guards against stale
+  // state from older versions where view could be "home" / "popular".
   const viewIdx = view === "import" ? 0 : Math.max(0, VIEWS.indexOf(view));
   const swipeRef = useRef(null);
 
@@ -413,8 +415,25 @@ export default function App() {
 
       {/* ── Desktop content area ── */}
       <div style={{ flex:1, overflowY:"auto", padding:"32px 40px" }}>
-        <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
-          year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+        {view === "library" ? (
+          <LibraryPage />
+        ) : (
+          <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
+            year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+        )}
+      </div>
+
+      {/* Desktop bottom-nav (matches mobile so users can switch tabs) */}
+      <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", justifyContent:"center", gap:8, padding:"6px 0" }}>
+        {NAV.map(({ v, icon, lbl }) => (
+          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
+            style={{ padding:"8px 22px", display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700, border:"none",
+              background: view === v ? "#f0fdf4" : "transparent",
+              borderRadius:8,
+              color: view === v ? "#166534" : "#9ca3af", cursor:"pointer" }}>
+            <span style={{ fontSize:18 }}>{icon}</span>{lbl}
+          </button>
+        ))}
       </div>
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}
@@ -435,12 +454,27 @@ export default function App() {
         <img src="/logo.png" alt="Bracket Club" style={{ height:56, width:56, objectFit:"contain" }} />
       </div>
 
-      {/* Single-page: Brackets is the home.  Tabs + Home/Month flow removed.
-          Legacy components (Home, Month, NewReleases, Import) stay in the
-          repo for reference and a possible revert; they're no longer mounted. */}
+      {/* Two tabs: Brackets + Library.  Legacy Home/Month/NewReleases code
+          stays in the repo for reference; not mounted. */}
       <div style={{ flex:1, height:0, overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-        <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
-          year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+        {view === "library" ? (
+          <LibraryPage />
+        ) : (
+          <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
+            year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
+        )}
+      </div>
+
+      {/* Bottom nav */}
+      <div style={{ flexShrink:0, background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", zIndex:20 }}>
+        {NAV.map(({ v, icon, lbl }) => (
+          <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
+            style={{ flex:1, padding:"10px 0", display:"flex", flexDirection:"column", alignItems:"center", gap:2, fontSize:11, fontWeight:700, border:"none",
+              background: view === v ? "#f0fdf4" : "#fff",
+              color: view === v ? "#166534" : "#9ca3af", cursor:"pointer" }}>
+            <span style={{ fontSize:20 }}>{icon}</span>{lbl}
+          </button>
+        ))}
       </div>
 
       {showShare && data && <ShareOverlay data={data} year={year} onClose={() => setShowShare(false)} />}

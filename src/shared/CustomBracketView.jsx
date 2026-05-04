@@ -21,6 +21,8 @@ import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import ItemSearch from "./ItemSearch.jsx";
 import GoodreadsImporter from "./GoodreadsImporter.jsx";
+import LibraryPicker from "./LibraryPicker.jsx";
+import { addToLibrary, addManyToLibrary, librarySize } from "./userLibrary.js";
 import { buildBracket, getBracketWinner } from "./bracket.js";
 import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale, playStar } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT, getFormat } from "./bracketFormats.js";
@@ -58,6 +60,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showVictory,   setShowVictory]   = useState(false);
   const [showImporter,  setShowImporter]  = useState(false);
+  const [showLibrary,   setShowLibrary]   = useState(false);
   const prevWinnerRef = useRef(bracket?.winner);
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeStart = useRef(null);
@@ -143,6 +146,9 @@ export default function CustomBracketView({ bracketId, onBack }) {
       rating:        null,
     };
     persist({ items: [...bracket.items, newBook] });
+    // Mirror into the user's library so the same book is one tap away in
+    // future brackets.  No-op if it's already saved.
+    addToLibrary(book, "bracket");
     playStar();                                          // little sparkle on add
   };
 
@@ -167,6 +173,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
     })).filter((b) => b.title);
     if (additions.length === 0) return;
     persist({ items: [...bracket.items, ...additions] });
+    addManyToLibrary(incoming, "bracket");
     playStar();
   };
 
@@ -235,6 +242,19 @@ export default function CustomBracketView({ bracketId, onBack }) {
             }}
           />
 
+          {/* Pick from your library — only useful once they have one */}
+          {librarySize() > 0 && (
+            <button onClick={() => { playUI("tap"); setShowLibrary(true); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #86efac", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+              <span style={{ fontSize: 18 }}>📖</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#14532d" }}>Pick from My Library</div>
+                <div style={{ fontSize: 11, color: "#15803d", marginTop: 1 }}>Quick-add from books you've saved</div>
+              </div>
+              <span style={{ color: "#a8a29e", fontSize: 16 }}>›</span>
+            </button>
+          )}
+
           {/* Bulk import from Goodreads */}
           <button onClick={() => { playUI("tap"); setShowImporter(true); }}
             style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#fff", border: "1.5px dashed #d6d3d1", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
@@ -290,6 +310,14 @@ export default function CustomBracketView({ bracketId, onBack }) {
             maxToAdd={size - bracket.items.length}
             onImport={(picked) => { addBooks(picked); setShowImporter(false); }}
             onClose={() => setShowImporter(false)}
+          />
+        )}
+
+        {showLibrary && (
+          <LibraryPicker
+            maxToAdd={size - bracket.items.length}
+            onImport={(picked) => { addBooks(picked); setShowLibrary(false); }}
+            onClose={() => setShowLibrary(false)}
           />
         )}
       </>
