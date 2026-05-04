@@ -12,12 +12,12 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Cover from "./Cover.jsx";
-import { playVictoryInKey } from "./soundscape.js";
+import { playVictoryInKey, playYearVictory } from "./soundscape.js";
 
 const CONFETTI_COLORS = ["#fbbf24", "#22c55e", "#3b82f6", "#ec4899", "#a855f7", "#ef4444", "#06b6d4"];
 const CONFETTI_COUNT  = 80;
 
-export default function VictoryScreen({ book, title = "Champion", subtitle, onClose, onShare }) {
+export default function VictoryScreen({ book, title = "Champion", subtitle, onClose, onShare, dramatic = false }) {
   const [entering, setEntering] = useState(true);
   const audioFired = useRef(false);
 
@@ -29,11 +29,13 @@ export default function VictoryScreen({ book, title = "Champion", subtitle, onCl
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate([15, 60, 25]);
       }
-      // Victory chime in whatever key the soundscape progression has reached.
-      // Same melody (I-iii-V-I8 triad arpeggio) as before, but now harmonically
-      // continuous with the user's tap progression.  Safe to ignore on browsers
-      // that block audio without a gesture — the crown click IS the gesture.
-      try { playVictoryInKey(); } catch { /* ignore audio failures */ }
+      // Victory chime — annual final gets the dramatic year-victory cadence
+      // (V7 → key modulation → resolve in new key) for extra weight.  Other
+      // crownings (monthly, custom brackets) get the regular in-key chime.
+      try {
+        if (dramatic) playYearVictory();
+        else          playVictoryInKey();
+      } catch { /* ignore audio failures */ }
       audioFired.current = true;
     }
     return () => clearTimeout(t);

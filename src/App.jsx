@@ -35,7 +35,7 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import VictoryScreen   from "./shared/VictoryScreen.jsx";
-import { playUI, isMuted, setMuted, playStar, playBattleStart, playWelcome } from "./shared/soundscape.js";
+import { playUI, isMuted, setMuted, playStar, playBattleStart, playWelcome, playYearVictory, startSwipeTone, updateSwipeTone, stopSwipeTone } from "./shared/soundscape.js";
 import { useAuth } from "./lib/AuthContext.jsx";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
@@ -984,13 +984,19 @@ function Month({ data, save, idx, setIdx, onBack }) {
       const onMatchTouchStart = (e) => { if (winner || isTriple) return; monthSwipeStart.current = e.touches[0].clientX; };
       const onMatchTouchMove  = (e) => {
         if (winner || isTriple || monthSwipeStart.current == null) return;
-        setMonthSwipeDx(Math.max(-120, Math.min(120, e.touches[0].clientX - monthSwipeStart.current)));
+        const dx = e.touches[0].clientX - monthSwipeStart.current;
+        setMonthSwipeDx(Math.max(-120, Math.min(120, dx)));
+        if (Math.abs(dx) > 10) {
+          startSwipeTone();
+          updateSwipeTone(dx / 120);
+        }
       };
       const onMatchTouchEnd = (e) => {
         if (winner || isTriple || monthSwipeStart.current == null) return;
         const dx = e.changedTouches[0].clientX - monthSwipeStart.current;
         monthSwipeStart.current = null;
         setMonthSwipeDx(0);
+        stopSwipeTone();
         if (Math.abs(dx) > 80) {
           const t = dx < 0 ? monthSwipeBound.current?.b1 : monthSwipeBound.current?.b2;
           if (t) monthVote(monthBattle, t);
@@ -1761,6 +1767,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
       subtitle="Bracket complete — congrats!"
       onClose={() => setShowVictory(false)}
       onShare={() => { setShowVictory(false); openShare?.(); }}
+      dramatic                                         /* deceptive cadence + key change */
     />
   );
 
@@ -1817,12 +1824,18 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
     if (swipeStart.current == null) return;
     const dx = e.touches[0].clientX - swipeStart.current;
     setSwipeDx(Math.max(-120, Math.min(120, dx)));
+    // Start the swipe tone after a small threshold so a quick tap doesn't trigger it
+    if (Math.abs(dx) > 10) {
+      startSwipeTone();
+      updateSwipeTone(dx / 120);                        // -1..+1
+    }
   };
   const onSwipeTouchEnd = (e) => {
     if (swipeStart.current == null) return;
     const dx = e.changedTouches[0].clientX - swipeStart.current;
     swipeStart.current = null;
     setSwipeDx(0);
+    stopSwipeTone();
     if (Math.abs(dx) > 80) {
       const target = dx < 0 ? swipeBound.current.b1 : swipeBound.current.b2;
       if (target) vote(battleId, target);

@@ -20,9 +20,34 @@ import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import { buildBracket, getBracketWinner } from "./bracket.js";
-import { playUI, playBattleStart } from "./soundscape.js";
+import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone, setScale, resetScale } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT } from "./bracketFormats.js";
 import { getCustomBracket, updateCustomBracket, deleteCustomBracket } from "./customBrackets.js";
+
+// Map our catalog genres to scale moods.  The dominant genre in the bracket's
+// items decides the scale while the user is inside the bracket — so a horror
+// bracket plays in minor, a sci-fi bracket in lydian, etc.  Mapping is
+// intentionally limited to genres where the mood swap is musically obvious;
+// everything else falls back to major.
+const GENRE_TO_SCALE = {
+  "horror":          "minor",
+  "mystery":         "minor",
+  "thriller":        "harmonic_minor",
+  "science fiction": "lydian",
+  "fantasy":         "mixolydian",
+};
+
+function dominantGenre(items) {
+  const counts = {};
+  for (const it of items || []) {
+    for (const g of (it.genres || [])) counts[g] = (counts[g] || 0) + 1;
+  }
+  let max = null, maxN = 0;
+  for (const [g, n] of Object.entries(counts)) {
+    if (n > maxN) { max = g; maxN = n; }
+  }
+  return max;
+}
 
 export default function CustomBracketView({ bracketId, onBack }) {
   const [bracket, setBracket]       = useState(() => getCustomBracket(bracketId));
@@ -36,6 +61,16 @@ export default function CustomBracketView({ bracketId, onBack }) {
   useEffect(() => {
     setBracket(getCustomBracket(bracketId));
   }, [bracketId]);
+
+  // Match the soundscape's scale to the bracket's dominant genre for as long
+  // as the user is inside this bracket — horror plays in minor, sci-fi in
+  // lydian, etc.  Reverts to major on unmount.
+  useEffect(() => {
+    const dom = dominantGenre(bracket?.items);
+    const scale = dom && GENRE_TO_SCALE[dom];
+    if (scale) setScale(scale);
+    return () => resetScale();
+  }, [bracket?.id]);
 
   // Trigger victory once when winner transitions null → set
   useEffect(() => {
@@ -160,13 +195,19 @@ export default function CustomBracketView({ bracketId, onBack }) {
     const onTouchStart = (e) => { if (winner || isTriple) return; swipeStart.current = e.touches[0].clientX; };
     const onTouchMove  = (e) => {
       if (winner || isTriple || swipeStart.current == null) return;
-      setSwipeDx(Math.max(-120, Math.min(120, e.touches[0].clientX - swipeStart.current)));
+      const dx = e.touches[0].clientX - swipeStart.current;
+      setSwipeDx(Math.max(-120, Math.min(120, dx)));
+      if (Math.abs(dx) > 10) {
+        startSwipeTone();
+        updateSwipeTone(dx / 120);
+      }
     };
     const onTouchEnd = (e) => {
       if (winner || isTriple || swipeStart.current == null) return;
       const dx = e.changedTouches[0].clientX - swipeStart.current;
       swipeStart.current = null;
       setSwipeDx(0);
+      stopSwipeTone();
       if (Math.abs(dx) > 80) {
         const t = dx < 0 ? contenders[0] : contenders[1];
         if (t) doVote(match.id, t);

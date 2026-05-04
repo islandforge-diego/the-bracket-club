@@ -22,7 +22,7 @@
 import { useState, useRef } from "react";
 import Cover from "./Cover.jsx";
 import { buildRoundRobin, computeStandings, roundRobinProgress, isRoundRobinComplete } from "./roundRobin.js";
-import { playUI, playBattleStart } from "./soundscape.js";
+import { playUI, playBattleStart, startSwipeTone, updateSwipeTone, stopSwipeTone } from "./soundscape.js";
 
 export default function RoundRobinView({ items, picks, onVote, onChampion, onReset, monthLabel }) {
   const [activeMatchId, setActiveMatchId] = useState(null);
@@ -56,13 +56,19 @@ export default function RoundRobinView({ items, picks, onVote, onChampion, onRes
     const onTouchStart = (e) => { if (winner) return; swipeStart.current = e.touches[0].clientX; };
     const onTouchMove  = (e) => {
       if (winner || swipeStart.current == null) return;
-      setSwipeDx(Math.max(-120, Math.min(120, e.touches[0].clientX - swipeStart.current)));
+      const dx = e.touches[0].clientX - swipeStart.current;
+      setSwipeDx(Math.max(-120, Math.min(120, dx)));
+      if (Math.abs(dx) > 10) {
+        startSwipeTone();
+        updateSwipeTone(dx / 120);
+      }
     };
     const onTouchEnd = (e) => {
       if (winner || swipeStart.current == null) return;
       const dx = e.changedTouches[0].clientX - swipeStart.current;
       swipeStart.current = null;
       setSwipeDx(0);
+      stopSwipeTone();
       if (Math.abs(dx) > 80) {
         const pick = dx < 0 ? match.a : match.b;
         if (pick) doVote(match.id, pick);
