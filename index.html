@@ -17,6 +17,22 @@
     <title>The Bracket Club</title>
     <link rel="icon" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
+    <style>
+      /* Brand type stack — applied to <html> so EVERY tree (including
+         portaled overlays at body level) inherits the same fonts.  Without
+         this, iOS Safari falls back to its default serif for portaled
+         content, making modals like "New Bracket" render in Times. */
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                     "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+      }
+      html, body, button, input, select, textarea {
+        font-family: inherit;
+      }
+    </style>
   </head>
   <body style="margin:0;padding:0;background:#f0fdf4;">
     <div id="root"></div>

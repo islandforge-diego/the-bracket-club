@@ -15,7 +15,6 @@ import { createPortal } from "react-dom";
 import { createCustomBracket } from "./customBrackets.js";
 import { getFormat, DEFAULT_FORMAT } from "./bracketFormats.js";
 import BracketFormatSheet from "./BracketFormatSheet.jsx";
-import { FULL } from "./constants.js";
 
 const SIZES = [4, 8, 16];
 
@@ -23,26 +22,13 @@ export default function CustomBracketCreator({ onClose, onCreated }) {
   const [title,           setTitle]           = useState("My Bracket");
   const [size,            setSize]            = useState(8);
   const [format,          setFormat]          = useState(DEFAULT_FORMAT);
-  const [month,           setMonth]           = useState(null);          // null = no month, 0..11 = jan..dec
   const [showFormatSheet, setShowFormatSheet] = useState(false);
 
   const year = new Date().getFullYear();
 
-  // Title default tracks the month when set, but only if the user hasn't
-  // typed something custom.  We detect "custom" by comparing to the auto title.
-  const autoTitle = month != null ? `Best of ${FULL[month]} ${year}` : "My Bracket";
-  const titleIsAuto = title === "My Bracket" || /^Best of /.test(title);
-
   // Round-robin caps at 6 books — switch to single-elim if user picks bigger
   const formatActive = (size > 6 && format === "round_robin") ? DEFAULT_FORMAT : format;
   const canCreate    = title.trim().length > 0;
-
-  const onMonthChange = (m) => {
-    setMonth(m);
-    if (titleIsAuto) {
-      setTitle(m == null ? "My Bracket" : `Best of ${FULL[m]} ${year}`);
-    }
-  };
 
   const doCreate = () => {
     const id = createCustomBracket({
@@ -50,7 +36,6 @@ export default function CustomBracketCreator({ onClose, onCreated }) {
       year,
       format: formatActive,
       size,
-      month,
       items:  [],
     });
     onCreated?.(id);
@@ -115,21 +100,6 @@ export default function CustomBracketCreator({ onClose, onCreated }) {
             <span style={{ fontWeight: 700, color: "#1c1917" }}>{getFormat(formatActive).label}</span>
             <span style={{ marginLeft: "auto", color: "#a8a29e", fontSize: 12 }}>change ▾</span>
           </button>
-        </div>
-
-        {/* Optional month tag */}
-        <div>
-          <div style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 6 }}>Month tag (optional)</div>
-          <select
-            value={month == null ? "" : String(month)}
-            onChange={(e) => onMonthChange(e.target.value === "" ? null : Number(e.target.value))}
-            style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#fff", fontSize: 14, color: "#1c1917" }}
-          >
-            <option value="">No month — free pick</option>
-            {FULL.map((m, i) => (
-              <option key={m} value={String(i)}>{m} {year}</option>
-            ))}
-          </select>
         </div>
 
         {/* Create CTA */}

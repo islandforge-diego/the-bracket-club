@@ -19,7 +19,10 @@ export default function BracketFormatSheet({ value, onSelect, onClose }) {
     <div
       onClick={onClose}
       style={{
-        position: "fixed", inset: 0, zIndex: 1000,
+        // Higher than CustomBracketCreator (1200) so it stacks ABOVE when
+        // opened from inside that modal.  Otherwise the picker renders
+        // behind the creator and looks broken.
+        position: "fixed", inset: 0, zIndex: 1300,
         background: "rgba(0,0,0,0.45)", display: "flex",
         alignItems: "flex-end", justifyContent: "center",
       }}
