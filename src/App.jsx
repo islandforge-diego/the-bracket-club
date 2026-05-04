@@ -22,6 +22,9 @@ import { buildBracket, getBracketWinner, isMatchEmpty, getR1Winner, getMatchItem
 import { applySeeding, DEFAULT_FORMAT, getFormat } from "./shared/bracketFormats.js";
 import BracketFormatSheet from "./shared/BracketFormatSheet.jsx";
 import RoundRobinView    from "./shared/RoundRobinView.jsx";
+import CustomBracketCreator from "./shared/CustomBracketCreator.jsx";
+import CustomBracketView    from "./shared/CustomBracketView.jsx";
+import { listCustomBrackets } from "./shared/customBrackets.js";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -1538,13 +1541,24 @@ function MonthReleases({ year, month, onBack, isDesktop = false }) {
 // ─── Bracket Hub ─────────────────────────────────────────────────────────────
 function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, markOb }) {
   const [mode, setMode] = useState(null);
+  const [activeCustomId, setActiveCustomId] = useState(null);
+  const [showCreator,    setShowCreator]    = useState(false);
+  // Re-read custom brackets list when creator closes or a child unmounts.
+  // listKey forces a re-evaluation without expensive subscription wiring.
+  const [listKey, setListKey] = useState(0);
 
   if (mode === "shelf") {
     return <Bracket data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={openShare} onBack={() => { setMode(null); setBattleId(null); }} label="My Shelf" />;
   }
 
+  if (activeCustomId) {
+    return <CustomBracketView bracketId={activeCustomId} onBack={() => { setActiveCustomId(null); setListKey((k) => k + 1); }} />;
+  }
+
   const shelfPicks = data.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
+  const customs    = listCustomBrackets();
+  void listKey;                                 // dependency for re-render after edits
 
   const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
 
@@ -1553,17 +1567,64 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
       <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", textAlign:"center" }}>Brackets</div>
 
       <div data-tour="bracket-hub" style={{ display:"flex", flexDirection:"column", gap:12 }}>
-      <button onClick={() => setMode("shelf")} style={cardStyle}>
-        <span style={{ fontSize:28 }}>📚</span>
-        <div style={{ flex:1 }}>
-          <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
-          <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
-            {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
+        <button onClick={() => setMode("shelf")} style={cardStyle}>
+          <span style={{ fontSize:28 }}>📚</span>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
+            <div style={{ fontSize:12, color: shelfChamp ? "#15803d" : "#78716c", marginTop:2 }}>
+              {shelfChamp ? `🏆 ${shelfChamp.title}` : `${shelfPicks}/12 monthly picks`}
+            </div>
           </div>
-        </div>
-        <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
-      </button>
+          <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+        </button>
+
+        {/* ── Custom (catalog) brackets ──────────────────────────── */}
+        <button onClick={() => setShowCreator(true)} style={{ ...cardStyle, background:"#f0fdf4", border:"2px dashed #86efac", boxShadow:"none" }}>
+          <span style={{ fontSize:28 }}>✨</span>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:800, fontSize:15, color:"#14532d" }}>Create Custom Bracket</div>
+            <div style={{ fontSize:12, color:"#15803d", marginTop:2 }}>
+              Pick books from any year and crown a champion
+            </div>
+          </div>
+          <span style={{ color:"#22c55e", fontSize:20, fontWeight:800 }}>+</span>
+        </button>
+
+        {customs.length > 0 && (
+          <>
+            <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, fontWeight:800, marginTop:6, paddingLeft:4 }}>
+              Custom brackets
+            </div>
+            {customs.map((cb) => {
+              const totalMatches = cb.format === "round_robin"
+                ? cb.items.length * (cb.items.length - 1) / 2
+                : cb.items.length - 1;
+              const playedMatches = Object.keys(cb.picks || {}).length;
+              return (
+                <button key={cb.id} onClick={() => setActiveCustomId(cb.id)} style={cardStyle}>
+                  <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : "📕"}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {cb.title}
+                    </div>
+                    <div style={{ fontSize:12, color: cb.winner ? "#15803d" : "#78716c", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {cb.winner ? `🏆 ${cb.winner.title}` : `${playedMatches}/${totalMatches} matches · ${cb.year} · ${cb.items.length} books`}
+                    </div>
+                  </div>
+                  <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
+
+      {showCreator && (
+        <CustomBracketCreator
+          onClose={() => { setShowCreator(false); setListKey((k) => k + 1); }}
+          onCreated={(id) => { setShowCreator(false); setListKey((k) => k + 1); setActiveCustomId(id); }}
+        />
+      )}
     </div>
   );
 }

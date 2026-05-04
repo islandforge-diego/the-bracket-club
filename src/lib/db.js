@@ -509,6 +509,40 @@ export async function getReleasesForMonth(year, month) {
 }
 
 /**
+ * Top N most-popular books published in a given year, used by the custom
+ * (catalog) bracket creator.  Sorted client-side by metadata.popularity_score
+ * since Postgres can't index nested JSONB numerics cleanly.
+ */
+export async function getTopBooksForYear(year, limit = 30) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("items")
+    .select("id, title, creators, cover_url, description, genres, published_at, published_year, published_month, external_ids, metadata")
+    .eq("is_verified", true)
+    .eq("published_year", year);
+  if (error) { console.error("getTopBooksForYear error:", error); return []; }
+  return (data || [])
+    .sort((a, b) => (b.metadata?.popularity_score ?? 0) - (a.metadata?.popularity_score ?? 0))
+    .slice(0, limit);
+}
+
+/**
+ * Years that have at least one verified catalog book — used to populate the
+ * year picker in the custom bracket creator so we don't show empty years.
+ */
+export async function getYearsWithReleases() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("items")
+    .select("published_year")
+    .eq("is_verified", true)
+    .not("published_year", "is", null);
+  if (error) { console.error("getYearsWithReleases error:", error); return []; }
+  const years = new Set((data || []).map((r) => r.published_year));
+  return [...years].sort((a, b) => b - a);
+}
+
+/**
  * Upsert a verified catalog item (admin only — enforced by DB policy).
  * Deduplicates by google_books_id stored in external_ids.
  *
