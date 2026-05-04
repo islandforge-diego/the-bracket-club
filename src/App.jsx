@@ -24,7 +24,8 @@ import BracketFormatSheet from "./shared/BracketFormatSheet.jsx";
 import RoundRobinView    from "./shared/RoundRobinView.jsx";
 import CustomBracketCreator from "./shared/CustomBracketCreator.jsx";
 import CustomBracketView    from "./shared/CustomBracketView.jsx";
-import { listCustomBrackets, createCustomBracket } from "./shared/customBrackets.js";
+import SwipeableRow         from "./shared/SwipeableRow.jsx";
+import { listCustomBrackets, createCustomBracket, deleteCustomBracket, updateCustomBracket } from "./shared/customBrackets.js";
 import { COMMUNITY_BRACKETS, getCommunityBracket } from "./shared/communityBrackets.js";
 import { getPrefs, scoreForUser } from "./shared/userPreferences.js";
 import LoginModal from "./lib/LoginModal.jsx";
@@ -1658,7 +1659,24 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
   // Show legacy "My Shelf" only for users who already have shelf data — new
   // users land on a clean Brackets-only experience.
   const showShelf  = shelfPicks > 0 || Object.keys(data.bracket || {}).length > 0;
-  const customs    = listCustomBrackets();
+  // Pinned brackets float to the top; everything else preserves the
+  // newest-first order from listCustomBrackets() so creation order is intact.
+  const customs    = listCustomBrackets()
+    .slice()
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+
+  const onDeleteCustom = (cb) => {
+    if (!confirm(`Delete "${cb.title}"?`)) return;
+    deleteCustomBracket(cb.id);
+    playUI("back");
+    setListKey((k) => k + 1);
+  };
+
+  const onTogglePinCustom = (cb) => {
+    updateCustomBracket(cb.id, { pinned: !cb.pinned });
+    playUI("select");
+    setListKey((k) => k + 1);
+  };
   void listKey;                                 // dependency for re-render after edits
 
   const cardStyle = { width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"18px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" };
@@ -1715,18 +1733,28 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
                 ? `${cb.items?.length || 0}/${cb.size} books · adding…`
                 : `${playedMatches}/${totalMatches} matches`;
             return (
-              <button key={cb.id} onClick={() => { playUI("select"); setActiveCustomId(cb.id); }} style={cardStyle}>
-                <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : !filled ? "📝" : "📕"}</span>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {cb.title}
+              <SwipeableRow key={cb.id}
+                onSwipeLeft={()  => onDeleteCustom(cb)}
+                onSwipeRight={() => onTogglePinCustom(cb)}
+                leftLabel="Delete" leftIcon="🗑️" leftBg="#dc2626"
+                rightLabel={cb.pinned ? "Unpin" : "Pin"} rightIcon={cb.pinned ? "📍" : "📌"} rightBg="#f59e0b"
+              >
+                <button onClick={() => { playUI("select"); setActiveCustomId(cb.id); }} style={cardStyle}>
+                  <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : !filled ? "📝" : "📕"}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      {cb.pinned && <span style={{ fontSize:13, lineHeight:1 }}>📌</span>}
+                      <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        {cb.title}
+                      </div>
+                    </div>
+                    <div style={{ fontSize:12, color: cb.winner ? "#15803d" : "#78716c", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {monthLabel ? `${monthLabel} · ` : ""}{subtitle}
+                    </div>
                   </div>
-                  <div style={{ fontSize:12, color: cb.winner ? "#15803d" : "#78716c", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {monthLabel ? `${monthLabel} · ` : ""}{subtitle}
-                  </div>
-                </div>
-                <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
-              </button>
+                  <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+                </button>
+              </SwipeableRow>
             );
           })}
         </div>
