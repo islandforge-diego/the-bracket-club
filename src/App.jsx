@@ -293,14 +293,17 @@ export default function App() {
     queueSync(nd);
   };
 
+  // New Releases tab temporarily hidden while we focus on brackets.  The
+  // component + data layer stay in the codebase so re-enabling is one revert.
   const NAV = [
-    { v:"home",    icon:"🏠", lbl:"Home"       },
-    { v:"popular", icon:"📖", lbl:"New Releases" },
-    { v:"bracket", icon:"🏆", lbl:"Bracket"    },
+    { v:"home",    icon:"🏠", lbl:"Home"    },
+    { v:"bracket", icon:"🏆", lbl:"Bracket" },
   ];
 
-  const VIEWS = ["home", "popular", "bracket"];
-  const viewIdx = view === "import" ? 0 : VIEWS.indexOf(view);
+  const VIEWS = ["home", "bracket"];
+  // Fall back to 0 (Home) for any unknown view — guards against stale "popular"
+  // state from before the New Releases tab was hidden.
+  const viewIdx = view === "import" ? 0 : Math.max(0, VIEWS.indexOf(view));
   const swipeRef = useRef(null);
 
   const onSwipeStart = (e) => {
@@ -360,8 +363,6 @@ export default function App() {
           <Home data={data} save={save} curM={curM} year={year} setYear={setYear}
             goBracket={() => setView("bracket")} goImport={() => setView("import")}
             openShare={() => setShowShare(true)} ob={ob} markOb={markOb} isDesktop />
-        ) : view === "popular" ? (
-          <NewReleases year={year} setYear={setYear} isDesktop />
         ) : (
           <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId}
             year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
@@ -392,14 +393,11 @@ export default function App() {
         </div>
       ) : (
         <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd} style={{ flex:1, height:0, overflow:"hidden" }}>
-          <div style={{ display:"flex", width:"300%", height:"100%", transform:`translateX(-${viewIdx*(100/3)}%)`, transition:"transform 0.3s ease-out" }}>
-            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+          <div style={{ display:"flex", width:"200%", height:"100%", transform:`translateX(-${viewIdx*50}%)`, transition:"transform 0.3s ease-out" }}>
+            <div style={{ width:"50%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
               <Home data={data} save={save} curM={curM} year={year} setYear={setYear} goBracket={() => setView("bracket")} goImport={() => setView("import")} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
-            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
-              <NewReleases year={year} setYear={setYear} />
-            </div>
-            <div style={{ width:"33.333%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
+            <div style={{ width:"50%", height:"100%", overflowY:"auto", WebkitOverflowScrolling:"touch", overscrollBehavior:"none" }}>
               <BracketHub data={data} save={save} battleId={battleId} setBattleId={setBattleId} year={year} openShare={() => setShowShare(true)} ob={ob} markOb={markOb} />
             </div>
           </div>
