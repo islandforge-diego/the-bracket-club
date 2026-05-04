@@ -28,6 +28,7 @@ import { getOnboarding, setOnboarding } from "./shared/onboarding.js";
 import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
+import VictoryScreen   from "./shared/VictoryScreen.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
@@ -708,9 +709,34 @@ function Month({ data, save, idx, setIdx, onBack }) {
   const [monthBattle,  setMonthBattle]  = useState(null);
   const [showBracket,  setShowBracket]  = useState(false);
   const [detailBook,   setDetailBook]   = useState(null);
+  const [showVictory,  setShowVictory]  = useState(false);
+  const [monthSwipeDx, setMonthSwipeDx] = useState(0);
+  const monthSwipeStart = useRef(null);
+  const monthSwipeBound = useRef(null);
+  const prevWinnerRef = useRef(data.months[idx]?.winner);
   const swipeX = useRef(null);
   const swipeY = useRef(null);
   const m = data.months[idx];
+
+  // Trigger victory screen when this month's winner gets crowned via the
+  // bracket flow.  Skip plain "star a book" clicks — those don't deserve
+  // confetti, the user just tapped a star.
+  useEffect(() => {
+    const cur = m?.winner;
+    if (cur && cur.id !== prevWinnerRef.current?.id && showBracket) {
+      setShowVictory(true);
+    }
+    prevWinnerRef.current = cur;
+  }, [m?.winner?.id, showBracket]);
+
+  const monthVictoryOverlay = showVictory && m?.winner && (
+    <VictoryScreen
+      book={m.winner}
+      title={`${FULL[idx]} ${data.year || ""} Winner`.trim()}
+      subtitle="Crowned via bracket"
+      onClose={() => setShowVictory(false)}
+    />
+  );
   const monthPicks = m.bracketPicks || {};
 
 
@@ -778,6 +804,28 @@ function Month({ data, save, idx, setIdx, onBack }) {
     if (!alreadyStarred) track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "star" });
   };
 
+  // Find the next ready monthly matchup (no winner yet, both contenders set).
+  // Walks the bracket round-by-round so we always advance forward.
+  const nextMonthMatch = (rounds, picks, skipId) => {
+    for (const round of rounds) {
+      for (const match of round) {
+        if (match.id === skipId || picks[match.id]) continue;
+        const contenders = [];
+        if (match.a !== undefined) {
+          contenders.push(match.a, match.b);
+          if (match.c) contenders.push(match.c);
+        } else {
+          if (match.feedA) { const w = getBracketWinner(match.feedA, rounds, picks); if (w) contenders.push(w); }
+          if (match.feedB) { const w = getBracketWinner(match.feedB, rounds, picks); if (w) contenders.push(w); }
+          if (match.feedC) { const w = getBracketWinner(match.feedC, rounds, picks); if (w) contenders.push(w); }
+        }
+        const needed = match.a !== undefined ? (match.c ? 3 : 2) : (match.feedC ? 3 : 2);
+        if (contenders.length === needed) return match.id;
+      }
+    }
+    return null;
+  };
+
   const monthVote = (matchId, book) => {
     const nd = { ...data };
     nd.months = [...nd.months];
@@ -786,16 +834,23 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
     const bracket = buildBracket(m.books);
     const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.[0];
+    let crowned = false;
     if (finalMatch) {
       const champion = getBracketWinner(finalMatch.id, bracket.rounds, newPicks);
       if (champion && newPicks[finalMatch.id]) {
         nd.months[idx].winner = champion;
         track(user?.id, EVENT.WINNER_CROWNED, { slot: idx, source: "bracket" });
+        crowned = true;
       }
     }
     save(nd);
     track(user?.id, EVENT.BRACKET_PICK, { type: "slot", slot: idx, match_id: matchId });
-    setMonthBattle(null);
+
+    // Auto-advance: if more matchups are ready, jump to the next one.  When
+    // crowning the champion we drop back to the bracket overview so the
+    // VictoryScreen + winner banner are visible.
+    const next = crowned ? null : nextMonthMatch(bracket.rounds, newPicks, matchId);
+    setTimeout(() => setMonthBattle(next), 650);
   };
 
   const monthClearVote = (matchId) => {
@@ -844,8 +899,31 @@ function Month({ data, save, idx, setIdx, onBack }) {
       const isFinal = roundNum === bracket.rounds.length;
       const isTriple = contenders.length === 3;
 
+      // Swipe-to-pick (2-way only — 3-way uses tap).  Same gesture model as
+      // the annual battle screen: drag toward the card you want.
+      const swipeAmount = Math.abs(monthSwipeDx) / 120;
+      const targetLeft  = !isTriple && monthSwipeDx < -8;
+      const targetRight = !isTriple && monthSwipeDx > 8;
+      monthSwipeBound.current = isTriple ? null : { b1: contenders[0], b2: contenders[1] };
+      const onMatchTouchStart = (e) => { if (winner || isTriple) return; monthSwipeStart.current = e.touches[0].clientX; };
+      const onMatchTouchMove  = (e) => {
+        if (winner || isTriple || monthSwipeStart.current == null) return;
+        setMonthSwipeDx(Math.max(-120, Math.min(120, e.touches[0].clientX - monthSwipeStart.current)));
+      };
+      const onMatchTouchEnd = (e) => {
+        if (winner || isTriple || monthSwipeStart.current == null) return;
+        const dx = e.changedTouches[0].clientX - monthSwipeStart.current;
+        monthSwipeStart.current = null;
+        setMonthSwipeDx(0);
+        if (Math.abs(dx) > 80) {
+          const t = dx < 0 ? monthSwipeBound.current?.b1 : monthSwipeBound.current?.b2;
+          if (t) monthVote(monthBattle, t);
+        }
+      };
+
       return (
         <>
+          {monthVictoryOverlay}
           {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
           <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
           <button onClick={() => setMonthBattle(null)}
@@ -855,14 +933,26 @@ function Month({ data, save, idx, setIdx, onBack }) {
           <div style={{ textAlign:"center" }}>
             <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{isFinal ? "Final" : `Round ${roundNum}`}</div>
             <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
+            {!isTriple && <div style={{ fontSize:10, color:"#d6d3d1", marginTop:4 }}>Tap a card or swipe toward your pick</div>}
           </div>
-          <div style={{ display:"flex", gap: isTriple ? 8 : 12, position:"relative" }}>
-            {contenders.filter(Boolean).map((book) => {
+          <div
+            onTouchStart={onMatchTouchStart}
+            onTouchMove={onMatchTouchMove}
+            onTouchEnd={onMatchTouchEnd}
+            style={{ display:"flex", gap: isTriple ? 8 : 12, position:"relative", touchAction:"pan-y" }}
+          >
+            {contenders.filter(Boolean).map((book, i) => {
               const won = winner?.id === book?.id;
               const lost = winner && !won;
+              const isB1 = i === 0;
+              const targeted = !isTriple && ((isB1 && targetLeft) || (!isB1 && targetRight));
+              const dimmed   = !isTriple && ((isB1 && targetRight) || (!isB1 && targetLeft));
+              const swipeScale  = won ? 1.04 : lost ? 0.96 : targeted ? 1 + 0.08 * swipeAmount : dimmed ? 1 - 0.04 * swipeAmount : 1;
+              const swipeOpacity = won ? 1 : lost ? 0.45 : dimmed ? 1 - 0.4 * swipeAmount : 1;
+              const swipeBorder  = won ? "#22c55e" : targeted ? "#22c55e" : "#e7e5e4";
               return (
                 <button key={book?.id} onClick={() => monthVote(monthBattle, book)}
-                  style={{ flex:1, position:"relative", border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                  style={{ flex:1, position:"relative", border:`2px solid ${swipeBorder}`, borderRadius:18, padding: isTriple ? "12px 6px" : "16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap: isTriple ? 6 : 10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: monthSwipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
                   <Cover book={book} size={isTriple ? "md" : "lg"} />
                   <div style={{ textAlign:"center" }}>
                     <div style={{ fontWeight:800, fontSize: isTriple ? 11 : 13, color:"#1c1917", lineHeight:1.2 }}>{book?.title}</div>
@@ -904,6 +994,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
   if (showBracket && m.books.length >= 2 && m.books.length <= 3) {
     return (
       <>
+        {monthVictoryOverlay}
         {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
         <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
@@ -963,6 +1054,8 @@ function Month({ data, save, idx, setIdx, onBack }) {
     const { rounds } = bracket;
 
     return (
+      <>
+      {monthVictoryOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -1063,6 +1156,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
           </div>
         )}
       </div>
+      </>
     );
   }
 
@@ -1426,21 +1520,91 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   const months = data.months;
   const b      = data.bracket || {};
   const [top3Pick, setTop3Pick] = useState(false);
+  const [showVictory, setShowVictory] = useState(false);
+  const prevFinalRef = useRef(b.final);
+
+  // Trigger victory screen exactly once when `final` transitions from null → set
+  useEffect(() => {
+    if (!prevFinalRef.current && b.final) {
+      setShowVictory(true);
+    }
+    prevFinalRef.current = b.final;
+  }, [b.final]);
+
+  // VictoryScreen is portaled to body so it doesn't matter which return branch
+  // renders it — but each branch needs to include it to keep React happy.
+  const victoryOverlay = showVictory && b.final && (
+    <VictoryScreen
+      book={b.final}
+      title={`${CAT.champion} of ${year}`}
+      subtitle="Bracket complete — congrats!"
+      onClose={() => setShowVictory(false)}
+      onShare={() => { setShowVictory(false); openShare?.(); }}
+    />
+  );
+
+  // Find the next matchup that's ready to vote on but doesn't have a winner.
+  // Order: remaining R1 matches → remaining R2 matches → final (if top3 ready).
+  // Returns the matchId or null if everything's decided.
+  const nextReadyMatch = (currentBracket, skipId) => {
+    for (const m of R1) {
+      if (m.id === skipId || currentBracket[m.id]) continue;
+      const b1 = months[m.m1]?.winner;
+      const b2 = months[m.m2]?.winner;
+      if (b1 && b2) return m.id;                      // both contenders present
+    }
+    for (const m of R2) {
+      if (m.id === skipId || currentBracket[m.id]) continue;
+      const w1 = getR1Winner(R1.find(r => r.id === m.p1), months, currentBracket);
+      const w2 = getR1Winner(R1.find(r => r.id === m.p2), months, currentBracket);
+      if (w1 && w2) return m.id;
+    }
+    return null;
+  };
 
   const vote = (matchId, book) => {
-    const nd = { ...data, bracket:{ ...data.bracket, [matchId]:book } };
+    const nextBracket = { ...data.bracket, [matchId]: book };
+    const nd = { ...data, bracket: nextBracket };
     save(nd);
     track(user?.id, EVENT.BRACKET_PICK, { type: "annual", match_id: matchId, year });
     if (matchId === "final") {
       track(user?.id, EVENT.SEASON_CHAMPION, { year });
     }
-    setBattleId(null);
+    // Auto-advance: if there's another matchup ready to vote, jump to it after
+    // a brief delay so the user sees their pick land before the screen swaps.
+    const next = matchId === "final" ? null : nextReadyMatch(nextBracket, matchId);
+    setTimeout(() => setBattleId(next), 650);
   };
 
   const clearVote = (matchId) => {
     const nd = { ...data, bracket:{ ...data.bracket } };
     delete nd.bracket[matchId];
     save(nd);
+  };
+
+  // Swipe-to-pick state — drag toward the card you want.  Negative dx = left
+  // (b1), positive dx = right (b2).  Threshold of 80px commits the pick.
+  const [swipeDx, setSwipeDx] = useState(0);
+  const swipeStart = useRef(null);
+  const swipeBound = useRef({ b1: null, b2: null });
+
+  const onSwipeTouchStart = (e) => {
+    swipeStart.current = e.touches[0].clientX;
+  };
+  const onSwipeTouchMove = (e) => {
+    if (swipeStart.current == null) return;
+    const dx = e.touches[0].clientX - swipeStart.current;
+    setSwipeDx(Math.max(-120, Math.min(120, dx)));
+  };
+  const onSwipeTouchEnd = (e) => {
+    if (swipeStart.current == null) return;
+    const dx = e.changedTouches[0].clientX - swipeStart.current;
+    swipeStart.current = null;
+    setSwipeDx(0);
+    if (Math.abs(dx) > 80) {
+      const target = dx < 0 ? swipeBound.current.b1 : swipeBound.current.b2;
+      if (target) vote(battleId, target);
+    }
   };
 
   const getMonthLabel = (book) => {
@@ -1466,10 +1630,19 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   if (battleId) {
     const match = [...R1, ...R2].find(m => m.id === battleId);
     const { b1, b2 } = getBooks(match, months, b);
+    swipeBound.current = { b1, b2 };
     const winner = b[match.id];
     const roundLabel = R1.includes(match) ? "Round 1" : "Round 2";
 
+    // Visual feedback during a drag — non-zero swipeDx scales up the targeted
+    // card and dims the other.  Cancels out once the user lifts their finger.
+    const swipeAmount = Math.abs(swipeDx) / 120;          // 0..1
+    const targetIsB1  = swipeDx < -8;                     // left intent
+    const targetIsB2  = swipeDx > 8;                      // right intent
+
     return (
+      <>
+      {victoryOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setBattleId(null)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -1478,15 +1651,27 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
         <div style={{ textAlign:"center" }}>
           <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2 }}>{roundLabel}</div>
           <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", marginTop:4 }}>Pick the Winner</div>
+          <div style={{ fontSize:10, color:"#d6d3d1", marginTop:4 }}>Tap a card or swipe toward your pick</div>
         </div>
-        <div style={{ display:"flex", gap:12, position:"relative" }}>
-          {[b1, b2].map((book) => {
-            const won  = winner?.id === book?.id;
-            const lost = winner && !won;
-            const ml   = getMonthLabel(book);
+        <div
+          onTouchStart={!winner ? onSwipeTouchStart : undefined}
+          onTouchMove={!winner ? onSwipeTouchMove : undefined}
+          onTouchEnd={!winner ? onSwipeTouchEnd : undefined}
+          style={{ display:"flex", gap:12, position:"relative", touchAction:"pan-y" }}
+        >
+          {[b1, b2].map((book, i) => {
+            const isB1   = i === 0;
+            const won    = winner?.id === book?.id;
+            const lost   = winner && !won;
+            const ml     = getMonthLabel(book);
+            const targeted = (isB1 && targetIsB1) || (!isB1 && targetIsB2);
+            const dimmed   = (isB1 && targetIsB2) || (!isB1 && targetIsB1);
+            const swipeScale  = won ? 1.04 : lost ? 0.96 : targeted ? 1 + 0.08 * swipeAmount : dimmed ? 1 - 0.04 * swipeAmount : 1;
+            const swipeOpacity = won ? 1 : lost ? 0.45 : dimmed ? 1 - 0.4 * swipeAmount : 1;
+            const swipeBorder  = won ? "#22c55e" : targeted ? "#22c55e" : "#e7e5e4";
             return (
               <button key={book?.id} onClick={() => vote(battleId, book)}
-                style={{ flex:1, border:`2px solid ${won?"#22c55e":"#e7e5e4"}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":"#fff", transform:won?"scale(1.04)":lost?"scale(.96)":"scale(1)", opacity:lost?0.45:1, boxShadow:won?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition:"all .2s", cursor:"pointer" }}>
+                style={{ flex:1, border:`2px solid ${swipeBorder}`, borderRadius:18, padding:"16px 10px", display:"flex", flexDirection:"column", alignItems:"center", gap:10, background:won?"#f0fdf4":lost?"#fafaf9":targeted?"#f0fdf4":"#fff", transform:`scale(${swipeScale})`, opacity:swipeOpacity, boxShadow:(won||targeted)?"0 4px 20px #22c55e44":"0 1px 4px #0001", transition: swipeStart.current ? "background 0.1s, border-color 0.1s" : "all .2s", cursor:"pointer" }}>
                 {ml && <div style={{ fontSize:10, fontWeight:700, color:"#78716c", background:"#f5f5f4", borderRadius:99, padding:"2px 8px" }}>{ml}</div>}
                 <Cover book={book} size="lg" />
                 <div style={{ textAlign:"center" }}>
@@ -1508,6 +1693,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
           </div>
         )}
       </div>
+      </>
     );
   }
 
@@ -1517,6 +1703,8 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
   if (top3Pick && top3.length >= 2) {
     return (
+      <>
+      {victoryOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setTop3Pick(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -1554,6 +1742,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
           </div>
         )}
       </div>
+      </>
     );
   }
 
@@ -1572,6 +1761,8 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   };
 
   return (
+    <>
+    {victoryOverlay}
     <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
       {/* Back + label */}
       {onBack && (
@@ -1776,5 +1967,6 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
         </div>
       )}
     </div>
+    </>
   );
 }
