@@ -1599,9 +1599,10 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
   const { user } = useAuth();
   const [mode, setMode] = useState(null);
   const [activeCustomId, setActiveCustomId] = useState(null);
-  const [showCreator,    setShowCreator]    = useState(false);
-  const [showLogin,      setShowLogin]      = useState(false);
+  const [showCreator,     setShowCreator]    = useState(false);
+  const [showLogin,       setShowLogin]      = useState(false);
   const [pendingPresetId, setPendingPresetId] = useState(null);  // community bracket waiting on sign-in
+  const [pendingCreator,  setPendingCreator]  = useState(false); // "Create Bracket" tap waiting on sign-in
   // Re-read custom brackets list when creator closes or a child unmounts.
   // listKey forces a re-evaluation without expensive subscription wiring.
   const [listKey, setListKey] = useState(0);
@@ -1645,6 +1646,10 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
         setListKey((k) => k + 1);
         setActiveCustomId(id);
       }
+    }
+    if (user && pendingCreator) {
+      setPendingCreator(false);
+      setShowCreator(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
@@ -1704,14 +1709,23 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
         <div style={{ fontSize:12, color:"#9ca3af", marginTop:4 }}>Create one, or jump back in</div>
       </div>
 
-      {/* Primary CTA */}
-      <button onClick={() => { playUI("tap"); setShowCreator(true); }}
+      {/* Primary CTA — gated on auth.  Voting on community brackets is the
+          guest path; creating your own requires an account so we can sync. */}
+      <button onClick={() => {
+          playUI("tap");
+          if (!user) { setPendingCreator(true); setShowLogin(true); }
+          else       { setShowCreator(true); }
+        }}
         style={{ ...cardStyle, background:"#14532d", color:"#fff", border:"none", boxShadow:"0 4px 14px rgba(20,83,45,0.25)", padding:"16px 18px" }}>
-        <span style={{ fontSize:28 }}>✨</span>
+        <span style={{ fontSize:28 }}>{user ? "✨" : "🔒"}</span>
         <div style={{ flex:1 }}>
-          <div style={{ fontWeight:800, fontSize:15, color:"#fff" }}>Create a Bracket</div>
+          <div style={{ fontWeight:800, fontSize:15, color:"#fff" }}>
+            {user ? "Create a Bracket" : "Sign in to create a Bracket"}
+          </div>
           <div style={{ fontSize:12, color:"rgba(255,255,255,0.75)", marginTop:2 }}>
-            Set it up, then add the books you want to face off
+            {user
+              ? "Set it up, then add the books you want to face off"
+              : "Free account — your brackets sync across devices"}
           </div>
         </div>
         <span style={{ fontSize:22, fontWeight:800, color:"#fff" }}>+</span>

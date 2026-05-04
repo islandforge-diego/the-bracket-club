@@ -10,18 +10,47 @@
  * Tap a shelf → onOpenShelf(id) → ShelfDetailPage
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import SwipeableRow from "./SwipeableRow.jsx";
 import ShelfCreateModal from "./ShelfCreateModal.jsx";
 import { listShelves, deleteShelf } from "./userShelves.js";
 import { playUI } from "./soundscape.js";
+import { useAuth } from "../lib/AuthContext.jsx";
+import LoginModal from "../lib/LoginModal.jsx";
+
+// One free shelf for un-signed-in users; more requires an account so we can
+// sync them across devices.
+const FREE_SHELF_LIMIT = 1;
 
 export default function MyShelvesPage({ onOpenShelf }) {
+  const { user }                    = useAuth();
   const [_, force]                  = useState(0);
   const rerender                    = () => force((n) => n + 1);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate,    setShowCreate]    = useState(false);
+  const [showLogin,     setShowLogin]     = useState(false);
+  const [pendingCreate, setPendingCreate] = useState(false);  // sign-in completes → open creator
 
-  const shelves = listShelves();
+  const shelves     = listShelves();
+  const atFreeLimit = !user && shelves.length >= FREE_SHELF_LIMIT;
+
+  // After sign-in completes (user transitions null → set) and we had a
+  // pending create intent, open the creator now that the gate has cleared.
+  useEffect(() => {
+    if (user && pendingCreate) {
+      setPendingCreate(false);
+      setShowCreate(true);
+    }
+  }, [user, pendingCreate]);
+
+  const onTapCreate = () => {
+    playUI("tap");
+    if (atFreeLimit) {
+      setPendingCreate(true);
+      setShowLogin(true);
+    } else {
+      setShowCreate(true);
+    }
+  };
 
   const onDelete = (s) => {
     if (!confirm(`Delete the "${s.name}" shelf?  Books inside it will be lost.`)) return;
@@ -50,17 +79,28 @@ export default function MyShelvesPage({ onOpenShelf }) {
       </div>
 
       {/* Primary CTA */}
-      <button onClick={() => { playUI("tap"); setShowCreate(true); }}
+      <button onClick={onTapCreate}
         style={{ ...cardStyle, background: "#14532d", color: "#fff", boxShadow: "0 4px 14px rgba(20,83,45,0.25)", padding: "16px 18px" }}>
-        <span style={{ fontSize: 28 }}>✨</span>
+        <span style={{ fontSize: 28 }}>{atFreeLimit ? "🔒" : "✨"}</span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 800, fontSize: 15, color: "#fff" }}>Create a Shelf</div>
+          <div style={{ fontWeight: 800, fontSize: 15, color: "#fff" }}>
+            {atFreeLimit ? "Sign in to add more shelves" : "Create a Shelf"}
+          </div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", marginTop: 2 }}>
-            Name it whatever — "5-Star Reads", "To Read", "Sci-Fi"…
+            {atFreeLimit
+              ? "Free accounts get unlimited shelves, synced across devices"
+              : 'Name it whatever — "5-Star Reads", "To Read", "Sci-Fi"…'}
           </div>
         </div>
         <span style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>+</span>
       </button>
+
+      {/* One-shelf-free notice for guests below the free limit */}
+      {!user && shelves.length === 0 && (
+        <div style={{ background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 12, padding: "10px 12px", fontSize: 12, color: "#854d0e", lineHeight: 1.5 }}>
+          ✨ Try one shelf free — sign in afterwards to add more and sync across devices.
+        </div>
+      )}
 
       {/* Shelves list */}
       {shelves.length === 0 ? (
@@ -98,6 +138,10 @@ export default function MyShelvesPage({ onOpenShelf }) {
           onClose={() => setShowCreate(false)}
           onCreated={(id) => { setShowCreate(false); onOpenShelf(id); }}
         />
+      )}
+
+      {showLogin && (
+        <LoginModal onClose={() => setShowLogin(false)} />
       )}
     </div>
   );
