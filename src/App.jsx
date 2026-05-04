@@ -24,7 +24,10 @@ import BracketFormatSheet from "./shared/BracketFormatSheet.jsx";
 import RoundRobinView    from "./shared/RoundRobinView.jsx";
 import CustomBracketCreator from "./shared/CustomBracketCreator.jsx";
 import CustomBracketView    from "./shared/CustomBracketView.jsx";
-import { listCustomBrackets } from "./shared/customBrackets.js";
+import { listCustomBrackets, createCustomBracket } from "./shared/customBrackets.js";
+import { COMMUNITY_BRACKETS, getCommunityBracket } from "./shared/communityBrackets.js";
+import { getPrefs, scoreForUser } from "./shared/userPreferences.js";
+import LoginModal from "./lib/LoginModal.jsx";
 import { createStore, freshData, migrateStorage } from "./shared/storage.js";
 import { fmtCount } from "./shared/helpers.js";
 import Cover from "./shared/Cover.jsx";
@@ -1576,9 +1579,12 @@ function MonthReleases({ year, month, onBack, isDesktop = false }) {
 
 // ─── Bracket Hub ─────────────────────────────────────────────────────────────
 function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, markOb }) {
+  const { user } = useAuth();
   const [mode, setMode] = useState(null);
   const [activeCustomId, setActiveCustomId] = useState(null);
   const [showCreator,    setShowCreator]    = useState(false);
+  const [showLogin,      setShowLogin]      = useState(false);
+  const [pendingPresetId, setPendingPresetId] = useState(null);  // community bracket waiting on sign-in
   // Re-read custom brackets list when creator closes or a child unmounts.
   // listKey forces a re-evaluation without expensive subscription wiring.
   const [listKey, setListKey] = useState(0);
@@ -1590,6 +1596,57 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
   if (activeCustomId) {
     return <CustomBracketView bracketId={activeCustomId} onBack={() => { setActiveCustomId(null); setListKey((k) => k + 1); }} />;
   }
+
+  // Fork a community bracket into the user's local custom-brackets store.
+  // Returns the new id.  If the user already has a fork of this preset, just
+  // reuse it instead of creating a duplicate.
+  const forkCommunityBracket = (preset) => {
+    const existing = listCustomBrackets().find((cb) => cb.presetId === preset.id);
+    if (existing) return existing.id;
+    return createCustomBracket({
+      title:   preset.title,
+      year:    new Date().getFullYear(),
+      format:  preset.format,
+      size:    preset.size,
+      items:   preset.books.map((b, i) => ({
+        id:        `bk_preset_${preset.id}_${i}`,
+        title:     b.title,
+        author:    b.author,
+        cover:     b.cover || "",
+        rating:    null,
+      })),
+      presetId: preset.id,
+    });
+  };
+
+  // Open a community bracket: account-gate first, then fork + open.
+  const openCommunityBracket = (preset) => {
+    if (!user) {
+      setPendingPresetId(preset.id);
+      setShowLogin(true);
+      return;
+    }
+    playUI("select");
+    const id = forkCommunityBracket(preset);
+    setListKey((k) => k + 1);
+    setActiveCustomId(id);
+  };
+
+  // After LoginModal closes, if the user is now signed in, complete the
+  // pending community-bracket open.  Tracked via React effect on the user
+  // object so it survives the Google OAuth round-trip.
+  useEffect(() => {
+    if (user && pendingPresetId) {
+      const preset = getCommunityBracket(pendingPresetId);
+      setPendingPresetId(null);
+      if (preset) {
+        const id = forkCommunityBracket(preset);
+        setListKey((k) => k + 1);
+        setActiveCustomId(id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const shelfPicks = data.months.filter(m => m.winner).length;
   const shelfChamp = data.bracket?.["final"];
@@ -1620,6 +1677,13 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
         </div>
         <span style={{ fontSize:22, fontWeight:800, color:"#fff" }}>+</span>
       </button>
+
+      {/* ── Community brackets — sorted by user taste ─────────────────── */}
+      <CommunityBracketsSection
+        prefs={getPrefs()}
+        forkedPresetIds={new Set(customs.map((c) => c.presetId).filter(Boolean))}
+        onOpen={openCommunityBracket}
+      />
 
       {/* Custom brackets list */}
       {customs.length === 0 && !showShelf && (
@@ -1688,7 +1752,68 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
           onCreated={(id) => { setShowCreator(false); setListKey((k) => k + 1); setActiveCustomId(id); }}
         />
       )}
+
+      {showLogin && (
+        <LoginModal onClose={() => setShowLogin(false)} />
+      )}
     </div>
+  );
+}
+
+// ─── Community Brackets section ──────────────────────────────────────────────
+//
+// Renders the curated COMMUNITY_BRACKETS list, sorted by how well each
+// matches the user's saved genre prefs.  Brackets the user has already forked
+// get an "in progress" badge and link to their personal copy.
+function CommunityBracketsSection({ prefs, forkedPresetIds, onOpen }) {
+  // Score, then stable-sort by score desc.  No prefs → original order.
+  const sorted = COMMUNITY_BRACKETS
+    .map((b, idx) => ({ b, idx, score: scoreForUser(b, prefs.genres) }))
+    .sort((a, b) => b.score - a.score || a.idx - b.idx)
+    .map((x) => x.b);
+
+  return (
+    <>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:6, paddingLeft:4 }}>
+        <div style={{ fontSize:11, color:"#9ca3af", textTransform:"uppercase", letterSpacing:2, fontWeight:800 }}>
+          Community Brackets
+        </div>
+        {prefs.genres?.length > 0 && (
+          <span style={{ fontSize:10, color:"#15803d", fontWeight:700, background:"#dcfce7", borderRadius:99, padding:"2px 8px" }}>
+            ✨ Picked for you
+          </span>
+        )}
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {sorted.map((cb) => {
+          const forked = forkedPresetIds.has(cb.id);
+          return (
+            <button key={cb.id} onClick={() => onOpen(cb)}
+              style={{ width:"100%", display:"flex", alignItems:"center", gap:14, background:"#fff", border:"none", borderRadius:16, padding:"14px 16px", boxShadow:"0 1px 4px #0001", cursor:"pointer", textAlign:"left" }}>
+              <span style={{ fontSize:30 }}>{cb.icon}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                  <div style={{ fontWeight:800, fontSize:14, color:"#1c1917" }}>{cb.title}</div>
+                  {forked && (
+                    <span style={{ fontSize:9, fontWeight:800, color:"#15803d", background:"#dcfce7", borderRadius:99, padding:"2px 7px", letterSpacing:0.5, textTransform:"uppercase" }}>
+                      In Progress
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize:11, color:"#78716c", marginTop:2, lineHeight:1.4 }}>
+                  {cb.tagline}
+                </div>
+                <div style={{ fontSize:10, color:"#a8a29e", marginTop:3 }}>
+                  {cb.size} books · {cb.format === "round_robin" ? "Round-robin" : "Single elim"}
+                </div>
+              </div>
+              <span style={{ color:"#d6d3d1", fontSize:18 }}>›</span>
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
