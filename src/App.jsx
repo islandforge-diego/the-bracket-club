@@ -35,6 +35,7 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import VictoryScreen   from "./shared/VictoryScreen.jsx";
+import { playUI, isMuted, setMuted } from "./shared/soundscape.js";
 import { useAuth } from "./lib/AuthContext.jsx";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
@@ -381,7 +382,7 @@ export default function App() {
         <span style={{ fontWeight:800, fontSize:18, letterSpacing:-0.5, marginRight:32 }}>The Bracket Club</span>
         <div style={{ display:"flex", gap:4 }}>
           {NAV.map(({ v, icon, lbl }) => (
-            <button key={v} onClick={() => { setBattleId(null); setView(v); }} style={{
+            <button key={v} onClick={() => { playUI("tap"); setBattleId(null); setView(v); }} style={{
               padding:"8px 18px", border:"none", borderRadius:8, cursor:"pointer",
               background: view===v ? "rgba(255,255,255,0.18)" : "transparent",
               color:"#fff", fontWeight: view===v ? 700 : 500, fontSize:14,
@@ -453,7 +454,7 @@ export default function App() {
           {NAV.map(({ v, icon, lbl }) => (
             <button
               key={v}
-              onClick={() => { setBattleId(null); setView(v); }}
+              onClick={() => { playUI("tap"); setBattleId(null); setView(v); }}
               style={{ flex:1, padding:"10px 0", display:"flex", flexDirection:"column", alignItems:"center", gap:2, fontSize:11, fontWeight:700, border:"none", background:view===v?"#f0fdf4":"#fff", color:view===v?"#166534":"#9ca3af", cursor:"pointer" }}
             >
               <span style={{ fontSize:20 }}>{icon}</span>{lbl}
@@ -500,19 +501,19 @@ function Home({ data, save, curM, year, setYear, goBracket, goImport, openShare,
       {/* ── Year Reads grid ── */}
       <div style={{ background:"#fff", borderRadius:16, padding: isDesktop ? "20px 24px" : "6px 10px", boxShadow:"0 1px 4px #0001", flex: isDesktop ? "none" : 1, display:"flex", flexDirection:"column" }}>
         <div data-tour="year-nav" style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginBottom:4 }}>
-          <button onClick={() => setYear(y => y - 1)} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
+          <button onClick={() => { playUI("back"); setYear(y => y - 1); }} disabled={year <= 2015} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year<=2015?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year<=2015?"#d6d3d1":"#14532d", padding:0 }}>‹</button>
           <div style={{ textAlign:"center" }}>
             <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>{year} Your Reads</div>
             <div style={{ fontSize:10, color:"#9ca3af", fontWeight:600 }}>{count} of 12 picks</div>
           </div>
-          <button onClick={() => setYear(y => y + 1)} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
+          <button onClick={() => { playUI("tap"); setYear(y => y + 1); }} disabled={year >= thisYear + 1} style={{ width:26, height:26, borderRadius:99, border:"1px solid #e7e5e4", background:"#fff", fontSize:13, cursor:year>=thisYear+1?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:year>=thisYear+1?"#d6d3d1":"#14532d", padding:0 }}>›</button>
         </div>
         <div data-tour="home-grid" style={{ display:"grid", gridTemplateColumns:`repeat(${isDesktop ? 4 : 3},1fr)`, gap: isDesktop ? 16 : 6, flex: isDesktop ? "none" : 1 }}>
           {MONTHS.map((m, i) => {
             const pick = picks[i];
             const hasBooksButNoPick = !pick && (data.months[i].books?.length > 0);
             return (
-              <button key={m} onClick={() => setSelectedMonth(i)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
+              <button key={m} onClick={() => { playUI("select"); setSelectedMonth(i); }} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, border:"none", background:"none", cursor:"pointer", padding:0 }}>
                 <span style={{ fontSize:10, fontWeight:700, color:"#9ca3af" }}>{m}</span>
                 {pick ? (
                   <div style={{ position:"relative", flex: isDesktop ? "none" : 1, display:"flex", justifyContent:"center" }}>
@@ -886,13 +887,14 @@ function Month({ data, save, idx, setIdx, onBack }) {
       }
     }
     save(nd);
+    playUI("commit");
     track(user?.id, EVENT.BRACKET_PICK, { type: "slot", slot: idx, match_id: matchId });
 
     // Auto-advance: if more matchups are ready, jump to the next one.  When
     // crowning the champion we drop back to the bracket overview so the
     // VictoryScreen + winner banner are visible.
     const next = crowned ? null : nextMonthMatch(bracket.rounds, newPicks, matchId);
-    setTimeout(() => setMonthBattle(next), 650);
+    setTimeout(() => { if (next) playUI("next"); setMonthBattle(next); }, 650);
   };
 
   const monthClearVote = (matchId) => {
@@ -1609,7 +1611,7 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
       <div style={{ fontWeight:800, fontSize:20, color:"#1c1917", textAlign:"center" }}>Brackets</div>
 
       <div data-tour="bracket-hub" style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        <button onClick={() => setMode("shelf")} style={cardStyle}>
+        <button onClick={() => { playUI("select"); setMode("shelf"); }} style={cardStyle}>
           <span style={{ fontSize:28 }}>📚</span>
           <div style={{ flex:1 }}>
             <div style={{ fontWeight:800, fontSize:15, color:"#1c1917" }}>My Shelf</div>
@@ -1621,7 +1623,7 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
         </button>
 
         {/* ── Custom (catalog) brackets ──────────────────────────── */}
-        <button onClick={() => setShowCreator(true)} style={{ ...cardStyle, background:"#f0fdf4", border:"2px dashed #86efac", boxShadow:"none" }}>
+        <button onClick={() => { playUI("tap"); setShowCreator(true); }} style={{ ...cardStyle, background:"#f0fdf4", border:"2px dashed #86efac", boxShadow:"none" }}>
           <span style={{ fontSize:28 }}>✨</span>
           <div style={{ flex:1 }}>
             <div style={{ fontWeight:800, fontSize:15, color:"#14532d" }}>Create Custom Bracket</div>
@@ -1643,7 +1645,7 @@ function BracketHub({ data, save, battleId, setBattleId, year, openShare, ob, ma
                 : cb.items.length - 1;
               const playedMatches = Object.keys(cb.picks || {}).length;
               return (
-                <button key={cb.id} onClick={() => setActiveCustomId(cb.id)} style={cardStyle}>
+                <button key={cb.id} onClick={() => { playUI("select"); setActiveCustomId(cb.id); }} style={cardStyle}>
                   <span style={{ fontSize:28 }}>{cb.winner ? "🏆" : "📕"}</span>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontWeight:800, fontSize:15, color:"#1c1917", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
@@ -1752,6 +1754,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
     const nextBracket = { ...data.bracket, [matchId]: book };
     const nd = { ...data, bracket: nextBracket };
     save(nd);
+    playUI("commit");
     track(user?.id, EVENT.BRACKET_PICK, { type: "annual", match_id: matchId, year });
     if (matchId === "final") {
       track(user?.id, EVENT.SEASON_CHAMPION, { year });
@@ -1759,7 +1762,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
     // Auto-advance: if there's another matchup ready to vote, jump to it after
     // a brief delay so the user sees their pick land before the screen swaps.
     const next = matchId === "final" ? null : nextReadyMatch(nextBracket, matchId);
-    setTimeout(() => setBattleId(next), 650);
+    setTimeout(() => { if (next) playUI("next"); setBattleId(next); }, 650);
   };
 
   const clearVote = (matchId) => {

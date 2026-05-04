@@ -24,9 +24,39 @@ import BooksApp from "./App.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import LoginModal from "./lib/LoginModal.jsx";
 import AdminPage from "./lib/AdminPage.jsx";
+import { isMuted, setMuted, playUI } from "./shared/soundscape.js";
 
 // Future category imports go here, e.g.:
 // import MoviesApp from "./pages/movies/MoviesApp.jsx";
+
+// Tiny sound-on/off chip floating top-left.  Visible to everyone (signed-in
+// or not) so anyone can silence the musical UI feedback.  Persists to
+// localStorage via setMuted() so the choice survives reload.
+function SoundToggle() {
+  const [m, setM] = useState(isMuted);
+  const isDesktop = typeof window !== 'undefined' && window.innerWidth > 768;
+  return (
+    <button
+      onClick={() => {
+        const next = !m;
+        setMuted(next);
+        setM(next);
+        if (!next) playUI("select");                  // confirmation chime when unmuting
+      }}
+      title={m ? "Sound off" : "Sound on"}
+      style={{
+        position: "fixed", top: 14, left: 16, zIndex: 200,
+        background: isDesktop ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.92)",
+        color: isDesktop ? "#fff" : "#1c1917",
+        border: isDesktop ? "1px solid rgba(255,255,255,0.3)" : "1px solid #e5e7eb",
+        borderRadius: 99, width: 32, height: 32, fontSize: 14,
+        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      {m ? "🔇" : "🔊"}
+    </button>
+  );
+}
 
 function AccountButton() {
   const { user, loading, signOut, isAdmin } = useAuth();
@@ -120,6 +150,7 @@ function AccountButton() {
 export default function CategoryRouter() {
   return (
     <>
+    <SoundToggle />
     <AccountButton />
     <Routes>
       {/* Redirect bare root to the books category for now */}

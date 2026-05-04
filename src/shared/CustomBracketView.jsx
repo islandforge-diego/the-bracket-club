@@ -20,6 +20,7 @@ import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
 import { buildBracket, getBracketWinner } from "./bracket.js";
+import { playUI } from "./soundscape.js";
 import { applySeeding, DEFAULT_FORMAT } from "./bracketFormats.js";
 import { getCustomBracket, updateCustomBracket, deleteCustomBracket } from "./customBrackets.js";
 
@@ -174,6 +175,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
 
     const doVote = (id, book) => {
       onVote(id, book);
+      playUI("commit");
       // Detect final-round completion → crown champion
       if (isFinal) {
         const newPicks = { ...bracket.picks, [id]: book };
@@ -182,7 +184,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
       }
       // Auto-advance: find next ready unplayed match
       const next = nextReadyMatchId(rounds, { ...bracket.picks, [id]: book }, id);
-      setTimeout(() => setActiveMatchId(next), 650);
+      setTimeout(() => { if (next) playUI("next"); setActiveMatchId(next); }, 650);
     };
 
     return (

@@ -22,6 +22,7 @@
 import { useState, useRef } from "react";
 import Cover from "./Cover.jsx";
 import { buildRoundRobin, computeStandings, roundRobinProgress, isRoundRobinComplete } from "./roundRobin.js";
+import { playUI } from "./soundscape.js";
 
 export default function RoundRobinView({ items, picks, onVote, onChampion, onReset, monthLabel }) {
   const [activeMatchId, setActiveMatchId] = useState(null);
@@ -70,9 +71,10 @@ export default function RoundRobinView({ items, picks, onVote, onChampion, onRes
 
     const doVote = (id, book) => {
       onVote(id, book);
+      playUI("commit");
       // Auto-advance to next unplayed match (or back to overview if done)
       const nextUnplayed = matches.find((mt) => mt.id !== id && !picks[mt.id]);
-      setTimeout(() => setActiveMatchId(nextUnplayed?.id || null), 650);
+      setTimeout(() => { if (nextUnplayed) playUI("next"); setActiveMatchId(nextUnplayed?.id || null); }, 650);
     };
 
     return (
