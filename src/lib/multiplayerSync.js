@@ -35,18 +35,21 @@ function generateShareCode() {
  * Mark a bracket as shared, generating a share_code if one doesn't exist.
  * Idempotent — calling twice on the same bracket returns the same code.
  *
+ * Accepts the FULL bracket object (not just its id) so we can upsert the
+ * row when it isn't on the server yet.  This handles the just-created
+ * bracket case where cloud-sync's debounced push hasn't fired.
+ *
  * `settings` may include any of:
  *   show_participant_names, reveal_mode, allow_anonymous, voting_closes_at
  */
-export async function shareBracket(bracketId, settings = {}) {
+export async function shareBracket(bracket, settings = {}) {
   if (!supabase) throw new Error("Supabase not configured");
+  if (!bracket?.id) throw new Error("shareBracket requires a bracket object");
 
-  // Check if already shared
-  const { data: existing } = await supabase
-    .from("custom_brackets")
-    .select("id, share_code, show_participant_names, reveal_mode, allow_anonymous, voting_closes_at")
-    .eq("id", bracketId)
-    .maybeSingle();
+  // Get the calling user — needed to satisfy the user_id NOT NULL column
+  // when we have to upsert a brand-new row.
+  const { data: { user } = {} } = await supabase.auth.getUser();
+  if (!user) throw new Error("must be signed in to share a bracket");
 
   const patch = {};
   if (settings.show_participant_names !== undefined) patch.show_participant_names = !!settings.show_participant_names;
@@ -54,32 +57,55 @@ export async function shareBracket(bracketId, settings = {}) {
   if (settings.allow_anonymous         !== undefined) patch.allow_anonymous         = !!settings.allow_anonymous;
   if (settings.voting_closes_at        !== undefined) patch.voting_closes_at        = settings.voting_closes_at;
 
-  // Assign a share_code if none yet — retry once on the (very rare) collision
-  if (!existing?.share_code) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const code = generateShareCode();
-      const { data, error } = await supabase
-        .from("custom_brackets")
-        .update({ ...patch, share_code: code })
-        .eq("id", bracketId)
-        .select()
-        .single();
-      if (!error)              return data;
-      if (error.code !== "23505") throw error;        // not a unique-violation
-    }
-    throw new Error("could not assign share_code");
+  // Check if the bracket exists on the server already
+  const { data: existing } = await supabase
+    .from("custom_brackets")
+    .select("id, share_code, show_participant_names, reveal_mode, allow_anonymous, voting_closes_at")
+    .eq("id", bracket.id)
+    .maybeSingle();
+
+  // If already shared, just apply any settings patch and return
+  if (existing?.share_code) {
+    if (Object.keys(patch).length === 0) return existing;
+    const { data, error } = await supabase
+      .from("custom_brackets").update(patch).eq("id", bracket.id).select().single();
+    if (error) throw error;
+    return data;
   }
 
-  // Already shared — just patch settings if any
-  if (Object.keys(patch).length === 0) return existing;
-  const { data, error } = await supabase
-    .from("custom_brackets")
-    .update(patch)
-    .eq("id", bracketId)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  // Not shared yet — assign a share_code with retry on rare collision
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const code = generateShareCode();
+    const fullPayload = {
+      id:         bracket.id,
+      user_id:    user.id,
+      client_id:  bracket.id,
+      title:      bracket.title || "Untitled bracket",
+      year:       bracket.year ?? null,
+      format:     bracket.format ?? null,
+      size:       bracket.size ?? 8,
+      month:      bracket.month ?? null,
+      preset_id:  bracket.presetId ?? null,
+      pinned:     !!bracket.pinned,
+      items:      bracket.items || [],
+      picks:      bracket.picks || {},
+      winner:     bracket.winner ?? null,
+      created_at: bracket.createdAt,
+      updated_at: bracket.updatedAt,
+      share_code: code,
+      ...patch,
+    };
+    // Upsert: updates the row if it exists, inserts otherwise.  Either
+    // way the share_code is set on return.  conflict on the primary key.
+    const { data, error } = await supabase
+      .from("custom_brackets")
+      .upsert(fullPayload, { onConflict: "id" })
+      .select()
+      .single();
+    if (!error) return data;
+    if (error.code !== "23505") throw error;        // not a unique violation
+  }
+  throw new Error("could not assign share_code (3 collisions)");
 }
 
 /** Disable the share link.  Existing participations remain in the DB. */

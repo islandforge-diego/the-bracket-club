@@ -1,18 +1,16 @@
 /**
  * BracketShareModal — author-side modal for inviting friends to vote.
  *
- * Triggered from CustomBracketView's header.  Generates a share_code on
- * first open (lazy — the bracket is solo until the author actually shares),
- * shows the public URL with copy + native-share buttons, and exposes the
- * four sharing toggles:
+ * Mobile-first flow:
+ *   1. Modal opens → share_code generated immediately → URL auto-copied
+ *      to the clipboard so the author can paste anywhere right away.
+ *   2. Hero "📤 Share Link" button at the very top opens the native share
+ *      sheet (iOS/Android) for one-tap posting to iMessage/Twitter/etc.
+ *   3. Settings (toggles + deadline) sit below — most users won't touch
+ *      them but they're there.
  *
- *   • Allow anonymous voting
- *   • Show participant names
- *   • Reveal results: live vs. at end
- *   • Voting deadline (optional date picker)
- *
- * Live participant count refreshes every few seconds while the modal is
- * open so the author sees friends arrive.
+ * On generation failure (network blip, RLS edge case) we surface the error
+ * with a Retry button instead of silently hiding the link section.
  */
 
 import { useEffect, useState } from "react";
@@ -23,36 +21,55 @@ import {
   updateShareSettings,
   countParticipations,
 } from "../lib/multiplayerSync.js";
+import { syncNow } from "./cloudSync.js";
 import { playUI } from "./soundscape.js";
 
 const REFRESH_MS = 6000;
 
 export default function BracketShareModal({ bracket, onUpdated, onClose }) {
-  // We treat the modal as authoritative — once mounted, ensure the bracket
-  // has a share_code.  shareBracket() is idempotent.
   const [working, setWorking] = useState(!bracket.share_code);
   const [shared,  setShared]  = useState(bracket);
   const [count,   setCount]   = useState(0);
-  const [copied,  setCopied]  = useState(false);
+  const [toast,   setToast]   = useState("");          // transient confirmation
+  const [error,   setError]   = useState("");
+  const [retryNonce, setRetryNonce] = useState(0);
 
+  const shareUrl = shared.share_code
+    ? `${window.location.origin}/b/${shared.share_code}`
+    : null;
+
+  // ── Generate (or refresh) the share link ──────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (shared.share_code) { setWorking(false); return; }
+      setWorking(true);
+      setError("");
       try {
-        if (!shared.share_code) {
-          const updated = await shareBracket(shared.id);
-          if (!cancelled) { setShared(updated); onUpdated?.(updated); }
-        }
+        // Force-flush any pending cloud sync push so the bracket exists
+        // on the server before we try to add share_code.  shareBracket
+        // also has an upsert fallback as belt-and-suspenders.
+        await syncNow().catch(() => { /* sync errors don't block */ });
+        const updated = await shareBracket(shared);
+        if (cancelled) return;
+        setShared(updated);
+        onUpdated?.(updated);
+        // Auto-copy as soon as the link is ready — saves a tap.
+        const url = `${window.location.origin}/b/${updated.share_code}`;
+        try {
+          await navigator.clipboard.writeText(url);
+          flashToast("✓ Link copied to clipboard");
+        } catch { /* clipboard permission denied — that's fine */ }
       } catch (e) {
-        console.warn("[ShareModal] shareBracket failed", e);
+        if (!cancelled) setError(e?.message || "Couldn't generate link");
       } finally {
         if (!cancelled) setWorking(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [retryNonce]);
 
-  // Poll participant count
+  // ── Live participants count ───────────────────────────────────────
   useEffect(() => {
     if (!shared.share_code) return;
     let cancelled = false;
@@ -65,9 +82,13 @@ export default function BracketShareModal({ bracket, onUpdated, onClose }) {
     return () => { cancelled = true; clearInterval(t); };
   }, [shared.share_code, shared.id]);
 
-  const shareUrl = shared.share_code
-    ? `${window.location.origin}/b/${shared.share_code}`
-    : null;
+  // ── Helpers ───────────────────────────────────────────────────────
+  let toastTimer = null;
+  function flashToast(msg) {
+    setToast(msg);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => setToast(""), 2200);
+  }
 
   const patch = async (key, value) => {
     playUI("tap");
@@ -86,28 +107,33 @@ export default function BracketShareModal({ bracket, onUpdated, onClose }) {
     if (!shareUrl) return;
     try {
       await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
       playUI("commit");
-      setTimeout(() => setCopied(false), 1600);
-    } catch { /* ignore */ }
+      flashToast("✓ Copied to clipboard");
+    } catch {
+      flashToast("Could not copy — long-press the link to copy");
+    }
   };
 
-  const onNativeShare = async () => {
+  const onShareLink = async () => {
     if (!shareUrl) return;
-    playUI("tap");
-    try {
-      if (navigator.share) {
+    playUI("commit");
+    // Native share sheet is the gold-standard mobile flow — pick iMessage,
+    // WhatsApp, Twitter, IG, etc. in one tap.  Falls back to copy.
+    if (navigator.share) {
+      try {
         await navigator.share({
           title: bracket.title || "Vote with me",
           text:  `Vote on "${bracket.title}" with me on The Bracket Club`,
           url:   shareUrl,
         });
-      } else {
-        onCopy();
+        flashToast("Shared!");
+        return;
+      } catch (e) {
+        if (e?.name === "AbortError") return;        // user dismissed
+        // fall through to copy
       }
-    } catch (e) {
-      if (e?.name !== "AbortError") onCopy();
     }
+    onCopy();
   };
 
   const onRevoke = async () => {
@@ -124,7 +150,6 @@ export default function BracketShareModal({ bracket, onUpdated, onClose }) {
     }
   };
 
-  // Date picker — accept a yyyy-mm-dd value, store as ISO at end-of-day UTC
   const deadlineDate = shared.voting_closes_at
     ? new Date(shared.voting_closes_at).toISOString().slice(0, 10)
     : "";
@@ -135,6 +160,7 @@ export default function BracketShareModal({ bracket, onUpdated, onClose }) {
     patch("voting_closes_at", d.toISOString());
   };
 
+  // ── Render ────────────────────────────────────────────────────────
   const overlay = (
     <div onClick={onClose}
       style={{
@@ -149,122 +175,190 @@ export default function BracketShareModal({ bracket, onUpdated, onClose }) {
           width: "100%", maxWidth: 520,
           borderRadius: "20px 20px 0 0",
           padding: "16px 18px 22px",
-          display: "flex", flexDirection: "column", gap: 14,
+          display: "flex", flexDirection: "column", gap: 12,
           boxShadow: "0 -8px 40px rgba(0,0,0,0.35)",
           maxHeight: "92vh", overflowY: "auto",
+          animation: "bcShareSlideUp 220ms ease-out",
         }}
       >
+        <style>{`@keyframes bcShareSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
+
         <div style={{ width: 40, height: 4, background: "#e7e5e4", borderRadius: 2, alignSelf: "center" }} />
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 18, color: "#14532d" }}>Share & Vote Together</div>
-            <div style={{ fontSize: 12, color: "#78716c", marginTop: 2 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 800, fontSize: 18, color: "#14532d" }}>Invite friends to vote</div>
+            <div style={{ fontSize: 12, color: "#78716c", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {bracket.title}
             </div>
           </div>
           <button onClick={onClose}
-            style={{ background: "#f5f5f4", border: "none", color: "#1c1917", borderRadius: 99, width: 30, height: 30, fontSize: 14, cursor: "pointer" }}>
+            style={{ background: "#f5f5f4", border: "none", color: "#1c1917", borderRadius: 99, width: 30, height: 30, fontSize: 14, cursor: "pointer", flexShrink: 0 }}>
             ✕
           </button>
         </div>
 
-        {/* ── Share link ─────────────────────────────────────────── */}
-        {working ? (
-          <div style={{ background: "#f5f5f4", borderRadius: 12, padding: 14, color: "#78716c", fontSize: 12, textAlign: "center" }}>
-            Setting up share link…
+        {/* ── Generation states ──────────────────────────────────── */}
+        {working && (
+          <div style={{ background: "#f5f5f4", borderRadius: 12, padding: 18, color: "#78716c", fontSize: 13, textAlign: "center" }}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>🔗</div>
+            Setting up your share link…
           </div>
-        ) : shareUrl ? (
+        )}
+
+        {error && !working && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 14, color: "#991b1b", fontSize: 12, textAlign: "center" }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Couldn't generate link</div>
+            <div style={{ marginBottom: 10, fontSize: 11, opacity: 0.85 }}>{error}</div>
+            <button onClick={() => setRetryNonce((n) => n + 1)}
+              style={{ background: "#dc2626", color: "#fff", border: "none", borderRadius: 99, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              Try again
+            </button>
+          </div>
+        )}
+
+        {shareUrl && !working && !error && (
           <>
+            {/* Hero share button — primary CTA */}
+            <button onClick={onShareLink}
+              style={{
+                width: "100%",
+                background: "linear-gradient(135deg, #166534, #14532d)",
+                color: "#fff", border: "none",
+                borderRadius: 14, padding: "16px 18px",
+                fontWeight: 800, fontSize: 16,
+                cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                boxShadow: "0 6px 20px rgba(20,83,45,0.35)",
+              }}>
+              <span style={{ fontSize: 22 }}>📤</span>
+              <span>Share Link via…</span>
+            </button>
+
+            {/* Link bar */}
             <div style={{
+              display: "flex", alignItems: "center", gap: 8,
               background: "#f0fdf4", border: "1.5px solid #86efac", borderRadius: 12,
               padding: "10px 12px",
-              display: "flex", alignItems: "center", gap: 8,
             }}>
-              <div style={{ flex: 1, minWidth: 0, fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#14532d", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div style={{
+                flex: 1, minWidth: 0,
+                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                fontSize: 12, color: "#14532d",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
                 {shareUrl}
               </div>
               <button onClick={onCopy}
-                style={{ background: "#14532d", color: "#fff", border: "none", borderRadius: 8, padding: "6px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-                {copied ? "Copied!" : "Copy"}
+                style={{
+                  background: "#14532d", color: "#fff",
+                  border: "none", borderRadius: 8,
+                  padding: "8px 14px", fontWeight: 700, fontSize: 12,
+                  cursor: "pointer", whiteSpace: "nowrap",
+                }}>
+                📋 Copy
               </button>
             </div>
 
-            <button onClick={onNativeShare}
-              style={{ width: "100%", background: "#14532d", color: "#fff", border: "none", borderRadius: 99, padding: "12px 14px", fontWeight: 800, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              📤 Share link
-            </button>
+            {/* Toast */}
+            {toast && (
+              <div style={{
+                background: "#dcfce7", color: "#15803d",
+                borderRadius: 10, padding: "8px 12px",
+                fontSize: 12, fontWeight: 700,
+                textAlign: "center",
+                animation: "bcToastFade 220ms ease-out",
+              }}>
+                <style>{`@keyframes bcToastFade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+                {toast}
+              </div>
+            )}
 
-            <div style={{ background: "#fafaf9", borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: "#78716c" }}>Friends voting</span>
-              <span style={{ fontWeight: 800, color: "#14532d" }}>{count}</span>
+            {/* Live count */}
+            <div style={{
+              display: "flex", justifyContent: "center", alignItems: "center", gap: 6,
+              fontSize: 12, color: "#78716c",
+            }}>
+              <span style={{
+                display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+                background: count > 0 ? "#22c55e" : "#d6d3d1",
+              }} />
+              <span>
+                <strong style={{ color: "#1c1917", fontWeight: 800 }}>{count}</strong>
+                {" "}
+                {count === 1 ? "friend voting" : "friends voting"}
+              </span>
             </div>
           </>
-        ) : null}
+        )}
 
-        {/* ── Settings ───────────────────────────────────────────── */}
-        <div style={{ height: 1, background: "#f5f5f4" }} />
+        {/* ── Settings ──────────────────────────────────────────── */}
+        {shareUrl && !working && (
+          <>
+            <div style={{ height: 1, background: "#f5f5f4", margin: "4px 0" }} />
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1 }}>
+              Settings
+            </div>
 
-        <Toggle
-          label="Allow anonymous voting"
-          hint="Friends can vote without signing in"
-          value={shared.allow_anonymous}
-          onChange={(v) => patch("allow_anonymous", v)}
-        />
-        <Toggle
-          label="Show participant names"
-          hint="Reveal who voted what to everyone"
-          value={shared.show_participant_names}
-          onChange={(v) => patch("show_participant_names", v)}
-        />
+            <Toggle
+              label="Allow anonymous voting"
+              hint="Friends can vote without signing in"
+              value={shared.allow_anonymous}
+              onChange={(v) => patch("allow_anonymous", v)}
+            />
+            <Toggle
+              label="Show participant names"
+              hint="Reveal who voted what to everyone"
+              value={shared.show_participant_names}
+              onChange={(v) => patch("show_participant_names", v)}
+            />
 
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917", marginBottom: 6 }}>
-            Reveal community results
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {[
-              { id: "reveal_at_end", label: "At the end", hint: "Hide while voting" },
-              { id: "live",          label: "Live",       hint: "After every pick" },
-            ].map((opt) => {
-              const active = shared.reveal_mode === opt.id;
-              return (
-                <button key={opt.id} onClick={() => patch("reveal_mode", opt.id)}
-                  style={{
-                    flex: 1, padding: "8px 6px",
-                    background: active ? "#14532d" : "#fff",
-                    color:      active ? "#fff"    : "#1c1917",
-                    border: `1.5px solid ${active ? "#14532d" : "#e7e5e4"}`,
-                    borderRadius: 10, fontWeight: 700, fontSize: 12,
-                    cursor: "pointer",
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
-                  }}>
-                  <span>{opt.label}</span>
-                  <span style={{ fontSize: 9, fontWeight: 500, opacity: 0.75 }}>{opt.hint}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917", marginBottom: 6 }}>
+                Reveal community results
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[
+                  { id: "reveal_at_end", label: "At the end", hint: "Hide while voting" },
+                  { id: "live",          label: "Live",       hint: "After every pick" },
+                ].map((opt) => {
+                  const active = shared.reveal_mode === opt.id;
+                  return (
+                    <button key={opt.id} onClick={() => patch("reveal_mode", opt.id)}
+                      style={{
+                        flex: 1, padding: "8px 6px",
+                        background: active ? "#14532d" : "#fff",
+                        color:      active ? "#fff"    : "#1c1917",
+                        border: `1.5px solid ${active ? "#14532d" : "#e7e5e4"}`,
+                        borderRadius: 10, fontWeight: 700, fontSize: 12,
+                        cursor: "pointer",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
+                      }}>
+                      <span>{opt.label}</span>
+                      <span style={{ fontSize: 9, fontWeight: 500, opacity: 0.75 }}>{opt.hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917", marginBottom: 6 }}>
-            Voting deadline
-            <span style={{ fontWeight: 500, fontSize: 11, color: "#9ca3af", marginLeft: 6 }}>(optional)</span>
-          </div>
-          <input type="date"
-            value={deadlineDate}
-            onChange={onSetDeadline}
-            style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, boxSizing: "border-box", background: "#fff" }}
-          />
-        </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#1c1917", marginBottom: 6 }}>
+                Voting deadline
+                <span style={{ fontWeight: 500, fontSize: 11, color: "#9ca3af", marginLeft: 6 }}>(optional)</span>
+              </div>
+              <input type="date"
+                value={deadlineDate}
+                onChange={onSetDeadline}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, boxSizing: "border-box", background: "#fff" }}
+              />
+            </div>
 
-        {/* ── Danger zone ───────────────────────────────────────── */}
-        {shareUrl && (
-          <button onClick={onRevoke}
-            style={{ marginTop: 4, background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 6, alignSelf: "center" }}>
-            Revoke share link
-          </button>
+            <button onClick={onRevoke}
+              style={{ marginTop: 4, background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 6, alignSelf: "center" }}>
+              Revoke share link
+            </button>
+          </>
         )}
       </div>
     </div>
