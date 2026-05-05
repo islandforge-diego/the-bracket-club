@@ -28,6 +28,8 @@
  * Cloud sync (Supabase) is intentionally deferred — this is local-first.
  */
 
+import { schedulePush, tombstone } from "./cloudSync.js";
+
 const STORAGE_KEY = "bc_custom_brackets";
 
 function readAll() {
@@ -82,6 +84,7 @@ export function createCustomBracket({ title, year, items = [], format, size = 8,
     updatedAt: now,
   };
   writeAll(all);
+  schedulePush();
   return id;
 }
 
@@ -93,6 +96,7 @@ export function updateCustomBracket(id, patch) {
   const next = { ...cur, ...patch, updatedAt: new Date().toISOString() };
   all[id] = next;
   writeAll(all);
+  schedulePush();
   return next;
 }
 
@@ -100,4 +104,5 @@ export function deleteCustomBracket(id) {
   const all = readAll();
   delete all[id];
   writeAll(all);
+  tombstone("custom_brackets", id);
 }

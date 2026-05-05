@@ -18,7 +18,10 @@
 import { useState, useEffect, useRef } from "react";
 import Cover from "./Cover.jsx";
 import VictoryScreen from "./VictoryScreen.jsx";
+import ShareSheet    from "./ShareSheet.jsx";
+import BracketShareModal from "./BracketShareModal.jsx";
 import RoundRobinView from "./RoundRobinView.jsx";
+import { useAuth } from "../lib/AuthContext.jsx";
 import ItemSearch from "./ItemSearch.jsx";
 import GoodreadsImporter from "./GoodreadsImporter.jsx";
 import CSVImporter       from "./CSVImporter.jsx";
@@ -61,10 +64,13 @@ export default function CustomBracketView({ bracketId, onBack }) {
   const [bracket, setBracket]       = useState(() => getCustomBracket(bracketId));
   const [activeMatchId, setActiveMatchId] = useState(null);
   const [showVictory,   setShowVictory]   = useState(false);
+  const [showShare,     setShowShare]     = useState(false);
+  const [showShareLink, setShowShareLink] = useState(false);
   const [showImporter,  setShowImporter]  = useState(false);
   const [showLibrary,   setShowLibrary]   = useState(false);
   const [showCSV,       setShowCSV]       = useState(false);
   const [showPaste,     setShowPaste]     = useState(false);
+  const { user } = useAuth();
   const prevWinnerRef = useRef(bracket?.winner);
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeStart = useRef(null);
@@ -195,10 +201,29 @@ export default function CustomBracketView({ bracketId, onBack }) {
           {bracket.year} · {bracket.items.length} books · {bracket.format}
         </div>
       </div>
+      {/* Multiplayer share — only available to signed-in authors with a full bracket */}
+      {user && bracket.items.length >= 2 && (
+        <button onClick={() => { playUI("tap"); setShowShareLink(true); }}
+          title="Invite friends to vote"
+          style={{ background: bracket.share_code ? "#dcfce7" : "none", color: "#15803d", border: bracket.share_code ? "1px solid #86efac" : "none", borderRadius: 99, fontSize: 13, cursor: "pointer", padding: "4px 10px", fontWeight: 700, marginRight: 6 }}>
+          {bracket.share_code ? "🔗 Shared" : "Share"}
+        </button>
+      )}
       <button onClick={onDelete} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 11, cursor: "pointer", padding: "4px 6px", fontWeight: 700 }}>
         🗑️
       </button>
     </div>
+  );
+
+  const shareLinkOverlay = showShareLink && (
+    <BracketShareModal
+      bracket={bracket}
+      onUpdated={(updated) => {
+        // Keep local bracket state in sync with the server settings (share_code, toggles)
+        setBracket((cur) => ({ ...cur, ...updated }));
+      }}
+      onClose={() => setShowShareLink(false)}
+    />
   );
 
   const victoryOverlay = showVictory && bracket.winner && (
@@ -207,6 +232,16 @@ export default function CustomBracketView({ bracketId, onBack }) {
       title={bracket.title}
       subtitle={`Champion of ${bracket.year}`}
       onClose={() => setShowVictory(false)}
+      onShare={() => { setShowVictory(false); setShowShare(true); }}
+    />
+  );
+
+  const shareOverlay = showShare && bracket.winner && (
+    <ShareSheet
+      book={bracket.winner}
+      bracketName={bracket.title}
+      subtitle="Champion"
+      onClose={() => setShowShare(false)}
     />
   );
 
@@ -368,7 +403,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
   if (bracket.format === "round_robin") {
     return (
       <>
-        {victoryOverlay}
+        {victoryOverlay}{shareOverlay}{shareLinkOverlay}
         {Header}
         <RoundRobinView
           items={items}
@@ -445,7 +480,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
 
     return (
       <>
-        {victoryOverlay}
+        {victoryOverlay}{shareOverlay}{shareLinkOverlay}
         {Header}
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
           <button onClick={() => setActiveMatchId(null)}
@@ -499,7 +534,7 @@ export default function CustomBracketView({ bracketId, onBack }) {
   // Knockout overview — rounds list
   return (
     <>
-      {victoryOverlay}
+      {victoryOverlay}{shareOverlay}{shareLinkOverlay}
       {Header}
       <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
         {Object.keys(bracket.picks).length > 0 && (

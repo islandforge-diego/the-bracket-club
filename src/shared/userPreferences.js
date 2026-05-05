@@ -10,6 +10,8 @@
  * algorithm.
  */
 
+import { schedulePush } from "./cloudSync.js";
+
 const STORAGE_KEY = "bc_user_prefs";
 
 export const GENRE_OPTIONS = [
@@ -39,8 +41,9 @@ export function getPrefs() {
 export function setPrefs(patch) {
   if (typeof window === "undefined") return;
   const cur = getPrefs();
-  const next = { ...cur, ...patch };
+  const next = { ...cur, ...patch, updatedAt: new Date().toISOString() };
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  schedulePush();
   return next;
 }
 

@@ -41,8 +41,10 @@ import Welcome from "./shared/Welcome.jsx";
 import Tour from "./shared/Tour.jsx";
 import BookDetailSheet from "./shared/BookDetailSheet.jsx";
 import VictoryScreen   from "./shared/VictoryScreen.jsx";
+import ShareSheet      from "./shared/ShareSheet.jsx";
 import { playUI, isMuted, setMuted, playStar, playBattleStart, playWelcome, playYearVictory, startSwipeTone, updateSwipeTone, stopSwipeTone } from "./shared/soundscape.js";
 import { useAuth } from "./lib/AuthContext.jsx";
+import { setCurrentUser as setSyncUser } from "./shared/cloudSync.js";
 import { loadShelf, syncShelfData, migrateLocalStorageToSupabase, getReleasesGridForYear, getReleasesForMonth } from "./lib/db.js";
 import { track, EVENT } from "./lib/events.js";
 
@@ -256,6 +258,11 @@ export default function App() {
     window.addEventListener('resize', fn);
     return () => window.removeEventListener('resize', fn);
   }, []);
+
+  // Cloud-sync handshake: tell the sync coordinator who's signed in.  On
+  // null → user it pulls remote shelves/brackets/prefs and merges them in,
+  // then pushes any local-only rows.  On user → null it stops syncing.
+  useEffect(() => { setSyncUser(user); }, [user]);
 
   // Welcome chime: plays once per session on the user's first interaction.
   // Browsers block audio without a gesture, so we wait for any pointerdown
@@ -749,6 +756,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
   const [showBracket,  setShowBracket]  = useState(false);
   const [detailBook,   setDetailBook]   = useState(null);
   const [showVictory,  setShowVictory]  = useState(false);
+  const [showShare,    setShowShare]    = useState(false);
   const [monthSwipeDx, setMonthSwipeDx] = useState(0);
   const monthSwipeStart = useRef(null);
   const monthSwipeBound = useRef(null);
@@ -774,6 +782,16 @@ function Month({ data, save, idx, setIdx, onBack }) {
       title={`${FULL[idx]} ${data.year || ""} Winner`.trim()}
       subtitle="Crowned via bracket"
       onClose={() => setShowVictory(false)}
+      onShare={() => { setShowVictory(false); setShowShare(true); }}
+    />
+  );
+
+  const monthShareOverlay = showShare && m?.winner && (
+    <ShareSheet
+      book={m.winner}
+      bracketName={`${FULL[idx]} ${data.year || ""}`.trim()}
+      subtitle="Winner"
+      onClose={() => setShowShare(false)}
     />
   );
   const monthPicks = m.bracketPicks || {};
@@ -978,7 +996,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
       return (
         <>
-          {monthVictoryOverlay}
+          {monthVictoryOverlay}{monthShareOverlay}
           {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
           <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
           <button onClick={() => setMonthBattle(null)}
@@ -1055,7 +1073,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
   if (showBracket && m.books.length >= 2 && m.books.length <= 3) {
     return (
       <>
-        {monthVictoryOverlay}
+        {monthVictoryOverlay}{monthShareOverlay}
         {detailBook && <BookDetailSheet book={detailBook} onClose={() => setDetailBook(null)} />}
         <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
@@ -1142,7 +1160,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
     };
     return (
       <>
-        {monthVictoryOverlay}
+        {monthVictoryOverlay}{monthShareOverlay}
         <div>
           <button onClick={() => setShowBracket(false)}
             style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:"16px 16px 0" }}>
@@ -1168,7 +1186,7 @@ function Month({ data, save, idx, setIdx, onBack }) {
 
     return (
       <>
-      {monthVictoryOverlay}
+      {monthVictoryOverlay}{monthShareOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setShowBracket(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -1900,6 +1918,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   const format = data.bracketFormat || DEFAULT_FORMAT;
   const [top3Pick, setTop3Pick] = useState(false);
   const [showVictory, setShowVictory] = useState(false);
+  const [showShare,   setShowShare]   = useState(false);
   const [showFormatSheet, setShowFormatSheet] = useState(false);
   const prevFinalRef = useRef(b.final);
 
@@ -1946,8 +1965,17 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
       title={`${CAT.champion} of ${year}`}
       subtitle="Bracket complete — congrats!"
       onClose={() => setShowVictory(false)}
-      onShare={() => { setShowVictory(false); openShare?.(); }}
+      onShare={() => { setShowVictory(false); setShowShare(true); }}
       dramatic                                         /* deceptive cadence + key change */
+    />
+  );
+
+  const yearShareOverlay = showShare && b.final && (
+    <ShareSheet
+      book={b.final}
+      bracketName={`${CAT.champion} of ${year}`}
+      subtitle="Champion"
+      onClose={() => setShowShare(false)}
     />
   );
 
@@ -2057,7 +2085,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
     return (
       <>
-      {victoryOverlay}
+      {victoryOverlay}{yearShareOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setBattleId(null)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -2124,7 +2152,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
   if (top3Pick && top3.length >= 2) {
     return (
       <>
-      {victoryOverlay}
+      {victoryOverlay}{yearShareOverlay}
       <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
         <button onClick={() => setTop3Pick(false)}
           style={{ background:"none", border:"none", color:"#15803d", fontWeight:700, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:4, padding:0 }}>
@@ -2182,7 +2210,7 @@ function Bracket({ data, save, battleId, setBattleId, year, openShare, onBack, l
 
   return (
     <>
-    {victoryOverlay}
+    {victoryOverlay}{yearShareOverlay}
     <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
       {/* Back + label */}
       {onBack && (

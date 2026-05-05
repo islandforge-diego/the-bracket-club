@@ -24,6 +24,7 @@ import BooksApp from "./App.jsx";
 import { useAuth } from "./lib/AuthContext.jsx";
 import LoginModal from "./lib/LoginModal.jsx";
 import AdminPage from "./lib/AdminPage.jsx";
+import SharedBracketView from "./shared/SharedBracketView.jsx";
 import { isMuted, setMuted, playUI } from "./shared/soundscape.js";
 
 // Future category imports go here, e.g.:
@@ -161,6 +162,9 @@ export default function CategoryRouter() {
 
       {/* Admin dashboard (server-side guarded by is_admin() RLS) */}
       <Route path="/admin" element={<AdminPage />} />
+
+      {/* Multiplayer bracket — public route, anonymous voting allowed */}
+      <Route path="/b/:shareCode" element={<SharedBracketView />} />
 
       {/* Future categories:
           <Route path="/movies/*" element={<MoviesApp />} />

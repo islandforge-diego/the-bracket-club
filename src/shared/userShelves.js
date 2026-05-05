@@ -23,6 +23,8 @@
  * key is cleared.
  */
 
+import { schedulePush, tombstone } from "./cloudSync.js";
+
 const STORAGE_KEY        = "bc_user_shelves";
 const LEGACY_STORAGE_KEY = "bc_user_library";
 
@@ -105,6 +107,7 @@ export function createShelf({ name, icon = "📚" }) {
   const all = readAll();
   all[id] = { id, name: (name || "Untitled").trim(), icon, createdAt: now, updatedAt: now, books: [] };
   writeAll(all);
+  schedulePush();
   return id;
 }
 
@@ -115,6 +118,7 @@ export function renameShelf(id, name, icon) {
   if (icon) all[id].icon = icon;
   all[id].updatedAt = new Date().toISOString();
   writeAll(all);
+  schedulePush();
   return all[id];
 }
 
@@ -123,6 +127,7 @@ export function deleteShelf(id) {
   if (!all[id]) return false;
   delete all[id];
   writeAll(all);
+  tombstone("shelves", id);
   return true;
 }
 
@@ -151,6 +156,7 @@ export function addBookToShelf(shelfId, book) {
   });
   shelf.updatedAt = new Date().toISOString();
   writeAll(all);
+  schedulePush();
   return id;
 }
 
@@ -181,6 +187,7 @@ export function addManyBooksToShelf(shelfId, books, source) {
   if (added > 0) {
     shelf.updatedAt = new Date().toISOString();
     writeAll(all);
+    schedulePush();
   }
   return added;
 }
@@ -194,6 +201,7 @@ export function removeBookFromShelf(shelfId, bookId) {
   if (shelf.books.length === before) return false;
   shelf.updatedAt = new Date().toISOString();
   writeAll(all);
+  schedulePush();
   return true;
 }
 

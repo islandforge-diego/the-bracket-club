@@ -11,3 +11,8 @@ dist
 scripts/seed-catalog/data.json
 scripts/seed-catalog/data.sql
 scripts/seed-catalog/chunks/
+
+# Supabase CLI artifacts (per-machine state, may contain credentials)
+supabase/.branches
+supabase/.temp
+supabase/.env
