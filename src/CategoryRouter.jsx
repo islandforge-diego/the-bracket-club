@@ -25,6 +25,7 @@ import { useAuth } from "./lib/AuthContext.jsx";
 import LoginModal from "./lib/LoginModal.jsx";
 import AdminPage from "./lib/AdminPage.jsx";
 import SharedBracketView from "./shared/SharedBracketView.jsx";
+import LogoBoardPage from "./logo-board/LogoBoardPage.jsx";
 import { isMuted, setMuted, playUI } from "./shared/soundscape.js";
 
 // Future category imports go here, e.g.:
@@ -165,6 +166,9 @@ export default function CategoryRouter() {
 
       {/* Multiplayer bracket — public route, anonymous voting allowed */}
       <Route path="/b/:shareCode" element={<SharedBracketView />} />
+
+      {/* Logo Board — standalone whiteboard for laying out logos */}
+      <Route path="/logo-board" element={<LogoBoardPage />} />
 
       {/* Future categories:
           <Route path="/movies/*" element={<MoviesApp />} />
